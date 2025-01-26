@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-dht-mmap-rust = "0.1.0"
+eg-seven-segment = "0.2.0"
 embedded-dht-rs = { version = "0.4.0", features = ["dht22"] }
 embedded-graphics = "0.8.1"
 embedded-hal = "1.0.0"
 epd-waveshare = "0.6.0"
+libc = "0.2.169"
 rppal = { version = "0.22.1", features = ["hal"] }

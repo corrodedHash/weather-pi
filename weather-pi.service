@@ -1,0 +1,14 @@
+[Unit]
+Description=Service for weather-pi
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/chrt -f 99 /usr/bin/weather-pi
+Restart=on-failure
+RestartSec=5s
+User=root
+Group=root
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

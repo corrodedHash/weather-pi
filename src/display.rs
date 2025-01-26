@@ -1,5 +1,9 @@
 use crate::delay::UnixDelay;
-use embedded_graphics::{Drawable, prelude::Point};
+use embedded_graphics::{
+    Drawable,
+    draw_target::DrawTarget,
+    prelude::{Point, Size},
+};
 use epd_waveshare::{color::Color, prelude::WaveshareDisplay};
 use rppal::{
     gpio::{Gpio, InputPin, OutputPin},
@@ -16,6 +20,7 @@ pub struct MyDisplay {
         UnixDelay,
     >,
     display: epd_waveshare::epd2in13_v2::Display2in13,
+    refresh_count: u32,
 }
 
 impl Default for MyDisplay {
@@ -50,34 +55,49 @@ impl MyDisplay {
             None,
         )
         .unwrap();
-
-        // Use display graphics from embedded-graphics
-        let display = epd_waveshare::epd2in13_v2::Display2in13::default();
+        let mut display = epd_waveshare::epd2in13_v2::Display2in13::default();
+        display.set_rotation(epd_waveshare::prelude::DisplayRotation::Rotate270);
         Self {
             bus: spi_hal,
             epd,
             display,
+            refresh_count: 0,
         }
     }
     pub fn text(&mut self, text: &str, position: Point) {
         let mut delay = UnixDelay {};
 
-        let style = embedded_graphics::mono_font::MonoTextStyle::new(
-            &embedded_graphics::mono_font::ascii::FONT_6X10,
-            Color::White,
-        );
-
-        // Create a text at position (20, 30) and draw it using the previously defined style
+        if self.refresh_count > 10 {
+            self.refresh_count = 0;
+            self.epd
+                .set_refresh(
+                    &mut self.bus,
+                    &mut delay,
+                    epd_waveshare::prelude::RefreshLut::Full,
+                )
+                .unwrap();
+        } else if self.refresh_count == 1 {
+            self.epd
+                .set_refresh(
+                    &mut self.bus,
+                    &mut delay,
+                    epd_waveshare::prelude::RefreshLut::Quick,
+                )
+                .unwrap();
+        }
+        self.refresh_count += 1;
+        let style = eg_seven_segment::SevenSegmentStyleBuilder::new()
+            .digit_size(Size::new(20, 40))
+            .digit_spacing(5)
+            .segment_width(5)
+            .segment_color(Color::Black)
+            .build();
+        self.display.clear(Color::White).unwrap();
         embedded_graphics::text::Text::new(text, position, style)
             .draw(&mut self.display)
             .unwrap();
-
         self.epd
-            .update_frame(&mut self.bus, self.display.buffer(), &mut delay)
+            .update_and_display_frame(&mut self.bus, self.display.buffer(), &mut delay)
             .unwrap();
-        self.epd.display_frame(&mut self.bus, &mut delay).unwrap();
-
-        // Set the EPD to sleep
-        self.epd.sleep(&mut self.bus, &mut delay).unwrap();
     }
 }
