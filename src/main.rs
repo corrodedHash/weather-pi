@@ -3,8 +3,8 @@ use embedded_graphics::prelude::Point;
 use std::{io::BufRead, time::Duration};
 
 mod delay;
-mod display;
 mod dht;
+mod display;
 
 #[allow(dead_code)]
 fn text_loop() {
@@ -23,9 +23,8 @@ fn text_loop() {
     }
 }
 
-fn main() {
-    println!("Hello World!");
-
+#[allow(dead_code)]
+fn temperature_display() {
     let mut v = display::MyDisplay::default();
 
     let mut error_count = 0;
@@ -48,4 +47,8 @@ fn main() {
 
         std::thread::sleep(Duration::from_secs(4));
     }
+}
+
+fn main() {
+    temperature_display();
 }

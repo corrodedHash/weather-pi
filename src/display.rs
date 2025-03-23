@@ -64,6 +64,7 @@ impl MyDisplay {
             refresh_count: 0,
         }
     }
+
     pub fn text(&mut self, text: &str, position: Point) {
         let mut delay = UnixDelay {};
 
