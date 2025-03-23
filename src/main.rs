@@ -1,4 +1,11 @@
-use embedded_graphics::prelude::Point;
+use embedded_graphics::{
+    Drawable,
+    draw_target::DrawTarget,
+    image::{Image, ImageRaw, ImageRawBE},
+    pixelcolor::{BinaryColor, Rgb565},
+    prelude::Point,
+};
+use embedded_graphics_simulator::{SimulatorDisplay, Window};
 
 use std::{io::BufRead, time::Duration};
 
@@ -49,6 +56,29 @@ fn temperature_display() {
     }
 }
 
+fn lazy_image_display() {
+    let mut display =
+        SimulatorDisplay::<BinaryColor>::new(embedded_graphics::prelude::Size::new(250, 122));
+
+    let settings = embedded_graphics_simulator::OutputSettingsBuilder::new()
+        .theme(embedded_graphics_simulator::BinaryColorTheme::OledBlue)
+        .build();
+
+    let mut window = Window::new("Digital clock", &settings);
+
+    let x = std::fs::read("./assets/heart.bmp").unwrap();
+
+    let bmp = tinybmp::Bmp::from_slice(&x).unwrap();
+    // Create an `Image` object to position the image at `Point::zero()`.
+    let image = Image::new(&bmp, Point::zero());
+
+    // Draw the image to the display.
+    display.clear(BinaryColor::Off).unwrap();
+    image.draw(&mut display).unwrap();
+    window.update(&mut display);
+    std::thread::sleep(std::time::Duration::from_millis(10000));
+}
+
 fn main() {
-    temperature_display();
+    lazy_image_display();
 }
