@@ -101,4 +101,16 @@ impl MyDisplay {
             .update_and_display_frame(&mut self.bus, self.display.buffer(), &mut delay)
             .unwrap();
     }
+    pub fn get_display(
+        &mut self,
+    ) -> &mut epd_waveshare::prelude::Display<122, 250, false, 4000, Color> {
+        &mut self.display
+    }
+    pub fn update_and_display_frame(&mut self) {
+        let mut delay = UnixDelay {};
+
+        self.epd
+            .update_and_display_frame(&mut self.bus, self.display.buffer(), &mut delay)
+            .unwrap();
+    }
 }
