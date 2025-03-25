@@ -1,10 +1,5 @@
 use crate::delay::UnixDelay;
-use embedded_graphics::{
-    Drawable,
-    draw_target::DrawTarget,
-    prelude::{Point, Size},
-};
-use epd_waveshare::{color::Color, prelude::WaveshareDisplay};
+use epd_waveshare::prelude::WaveshareDisplay;
 use rppal::{
     gpio::{Gpio, InputPin, OutputPin},
     spi::{SimpleHalSpiDevice, Spi},
@@ -20,7 +15,6 @@ pub struct MyDisplay {
         UnixDelay,
     >,
     display: epd_waveshare::epd2in13_v2::Display2in13,
-    refresh_count: u32,
 }
 
 impl Default for MyDisplay {
@@ -61,51 +55,21 @@ impl MyDisplay {
             bus: spi_hal,
             epd,
             display,
-            refresh_count: 0,
         }
     }
 
-    pub fn text(&mut self, text: &str, position: Point) {
+    pub fn set_refresh(&mut self, mode: epd_waveshare::prelude::RefreshLut) {
         let mut delay = UnixDelay {};
 
-        if self.refresh_count > 10 {
-            self.refresh_count = 0;
-            self.epd
-                .set_refresh(
-                    &mut self.bus,
-                    &mut delay,
-                    epd_waveshare::prelude::RefreshLut::Full,
-                )
-                .unwrap();
-        } else if self.refresh_count == 1 {
-            self.epd
-                .set_refresh(
-                    &mut self.bus,
-                    &mut delay,
-                    epd_waveshare::prelude::RefreshLut::Quick,
-                )
-                .unwrap();
-        }
-        self.refresh_count += 1;
-        let style = eg_seven_segment::SevenSegmentStyleBuilder::new()
-            .digit_size(Size::new(20, 40))
-            .digit_spacing(5)
-            .segment_width(5)
-            .segment_color(Color::Black)
-            .build();
-        self.display.clear(Color::White).unwrap();
-        embedded_graphics::text::Text::new(text, position, style)
-            .draw(&mut self.display)
-            .unwrap();
         self.epd
-            .update_and_display_frame(&mut self.bus, self.display.buffer(), &mut delay)
+            .set_refresh(&mut self.bus, &mut delay, mode)
             .unwrap();
     }
-    pub fn get_display(
-        &mut self,
-    ) -> &mut epd_waveshare::prelude::Display<122, 250, false, 4000, Color> {
+
+    pub fn get_display(&mut self) -> &mut epd_waveshare::epd2in13_v2::Display2in13 {
         &mut self.display
     }
+
     pub fn update_and_display_frame(&mut self) {
         let mut delay = UnixDelay {};
 

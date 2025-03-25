@@ -1,0 +1,4 @@
+watched_ip = "192.168.178.28"
+fade_max_velocity = 100
+fade_min_velocity = 50
+heart_bmp_path = "/usr/share/skyscreen/heart.bmp"
