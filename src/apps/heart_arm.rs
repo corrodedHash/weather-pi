@@ -11,11 +11,10 @@ use embedded_graphics::{
     pixelcolor::BinaryColor,
     prelude::{Dimensions, Drawable, Point},
 };
-use epd_waveshare::color::Color;
 
 use crate::{
     display,
-    effects::{color_map_display::ColorMapDisplay, hash_display::HashDisplay},
+    effects::{alpha_display::make_alpha_display, hash_display::HashDisplay},
 };
 
 pub fn building_image(
@@ -36,10 +35,6 @@ pub fn building_image(
 
     let heart_image = Image::new(&heart_bmp, Point::zero());
 
-    let color_map = |x| match x {
-        BinaryColor::On => Color::Black,
-        BinaryColor::Off => Color::White,
-    };
     v.set_refresh(epd_waveshare::prelude::RefreshLut::Quick);
     for i in 1u64..=steps {
         if let Some(k) = keep_going {
@@ -47,14 +42,21 @@ pub fn building_image(
                 return;
             }
         }
-        let mut d = HashDisplay::new(v.get_display(), seed, (u64::MAX / steps) * i);
-        let mut c = ColorMapDisplay::new(&mut d, color_map);
-        heart_image.draw(&mut c).unwrap();
+        {
+            let mut c = v.get_display();
+            let mut f = make_alpha_display(&mut c, BinaryColor::Off);
+            let mut d = HashDisplay::new(&mut f, seed, (u64::MAX / steps) * i);
+            // let mut c = ColorMapDisplay::new(&mut d, color_map);
+            heart_image.draw(&mut d).unwrap();
+        }
 
         v.update_and_display_frame();
     }
-    let mut c = ColorMapDisplay::new(v.get_display(), color_map);
-    heart_image.draw(&mut c).unwrap();
+    {
+        let mut c = v.get_display();
+        let mut f = make_alpha_display(&mut c, BinaryColor::Off);
+        heart_image.draw(&mut f).unwrap();
+    }
 
     v.update_and_display_frame();
 }
@@ -98,12 +100,20 @@ struct GreeterConfig {
 }
 
 pub fn greeter() {
-    let config = Config::builder()
-        .add_source(config::File::with_name("/etc/skyscreen/greeter"))
-        .build()
-        .unwrap();
+    let app: GreeterConfig = if cfg!(target_arch = "x86_64") {
+        GreeterConfig {
+            watched_ip: "192.168.178.29".to_owned(),
+            heart_bmp_path: "./assets/heart_full.bmp".to_owned(),
+            steps: 100,
+        }
+    } else {
+        let config = Config::builder()
+            .add_source(config::File::with_name("/etc/skyscreen/greeter"))
+            .build()
+            .unwrap();
 
-    let app: GreeterConfig = config.try_deserialize().unwrap();
+        config.try_deserialize().unwrap()
+    };
     dbg!(&app);
     let heart_bpm_path = PathBuf::from(app.heart_bmp_path);
     let kim_here = Arc::new(AtomicBool::new(false));
@@ -113,7 +123,7 @@ pub fn greeter() {
 
     let mut v = display::MyDisplay::default();
 
-    v.get_display().clear(Color::White).unwrap();
+    v.get_display().clear(BinaryColor::Off).unwrap();
     v.update_and_display_frame();
     loop {
         if kim_here.load(std::sync::atomic::Ordering::Relaxed) == last_kim {
@@ -129,18 +139,19 @@ pub fn greeter() {
 
             font.render_aligned(
                 text,
-                v.get_display().bounding_box().center() + Point::new(75, 0),
+                // v.get_display().bounding_box().center() + Point::new(75, 0),
+                v.get_display().bounding_box().center(),
                 u8g2_fonts::types::VerticalPosition::Center,
                 u8g2_fonts::types::HorizontalAlignment::Center,
-                u8g2_fonts::types::FontColor::Transparent(Color::Black),
-                v.get_display(),
+                u8g2_fonts::types::FontColor::Transparent(BinaryColor::On),
+                &mut v.get_display(),
             )
             .unwrap();
 
             v.update_and_display_frame();
             building_image(&mut v, Some(&kim_here), &heart_bpm_path, app.steps);
         } else {
-            v.get_display().clear(Color::White).unwrap();
+            v.get_display().clear(BinaryColor::Off).unwrap();
             v.set_refresh(epd_waveshare::prelude::RefreshLut::Full);
             v.update_and_display_frame();
         }

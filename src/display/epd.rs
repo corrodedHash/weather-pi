@@ -1,5 +1,6 @@
-use crate::delay::UnixDelay;
-use epd_waveshare::prelude::WaveshareDisplay;
+use crate::{delay::UnixDelay, effects::color_map_display::ColorMapDisplay};
+use embedded_graphics::pixelcolor::BinaryColor;
+use epd_waveshare::{epd2in13_v2::Display2in13, prelude::WaveshareDisplay};
 use rppal::{
     gpio::{Gpio, InputPin, OutputPin},
     spi::{SimpleHalSpiDevice, Spi},
@@ -14,7 +15,7 @@ pub struct MyDisplay {
         OutputPin,
         UnixDelay,
     >,
-    display: epd_waveshare::epd2in13_v2::Display2in13,
+    display: Display2in13,
 }
 
 impl Default for MyDisplay {
@@ -49,7 +50,7 @@ impl MyDisplay {
             None,
         )
         .unwrap();
-        let mut display = epd_waveshare::epd2in13_v2::Display2in13::default();
+        let mut display = Display2in13::default();
         display.set_rotation(epd_waveshare::prelude::DisplayRotation::Rotate270);
         Self {
             bus: spi_hal,
@@ -66,8 +67,12 @@ impl MyDisplay {
             .unwrap();
     }
 
-    pub const fn get_display(&mut self) -> &mut epd_waveshare::epd2in13_v2::Display2in13 {
-        &mut self.display
+    pub const fn get_display<'a>(&'a mut self) -> ColorMapDisplay<'a, Display2in13, BinaryColor> {
+        let color_map = |x| match x {
+            BinaryColor::On => epd_waveshare::color::Color::Black,
+            BinaryColor::Off => epd_waveshare::color::Color::White,
+        };
+        ColorMapDisplay::new(&mut self.display, color_map)
     }
 
     pub fn update_and_display_frame(&mut self) {
