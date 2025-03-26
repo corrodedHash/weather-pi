@@ -12,6 +12,8 @@ mod apps;
 mod delay;
 // mod dht;
 mod display;
+// mod overlay;
+mod effects;
 
 fn main() {
     apps::heart_arm::greeter();

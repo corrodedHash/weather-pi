@@ -1,134 +1,62 @@
 use std::{
-    path::{Path, PathBuf}, sync::{atomic::AtomicBool, Arc}, thread::JoinHandle, time::Duration
+    path::{Path, PathBuf},
+    sync::{Arc, atomic::AtomicBool},
+    thread::JoinHandle,
+    time::Duration,
 };
 
 use embedded_graphics::{
     draw_target::DrawTarget,
-    geometry::OriginDimensions,
+    image::Image,
     pixelcolor::BinaryColor,
-    prelude::{Dimensions, Point},
-    primitives::Rectangle,
+    prelude::{Dimensions, Drawable, Point},
 };
 use epd_waveshare::color::Color;
-use rand::Rng;
 
-use crate::display;
-
-fn flip_nth_bit(toggle_one: bool, n: usize, array: &mut [u8]) {
-    let mut count = 0;
-    for c in array.iter_mut() {
-        for b in 0..8 {
-            if (((*c >> b) & 1) == 1) == toggle_one {
-                if count == n {
-                    if toggle_one {
-                        *c &= !(1u8 << b);
-                    } else {
-                        *c |= 1u8 << b;
-                    }
-                    return;
-                }
-                count += 1;
-            }
-        }
-    }
-}
-
-/// If `over` is 1, it is transparent. Otherwise, `under` will always turn into a 1
-fn overlay_binary(under: &mut [u8], over: &[u8]) {
-    under.iter_mut().zip(over).for_each(|(u, o)| *u |= !o);
-}
+use crate::{
+    display,
+    effects::{color_map_display::ColorMapDisplay, hash_display::HashDisplay},
+};
 
 pub fn building_image(
     v: &mut display::MyDisplay,
     keep_going: Option<&Arc<std::sync::atomic::AtomicBool>>,
     heart_bmp_path: &Path,
-    max_fade: u32,
-    min_fade: u32,
+    steps: u64,
 ) {
-    let heart_bmp_data = match std::fs::read(heart_bmp_path){
+    let heart_bmp_data = match std::fs::read(heart_bmp_path) {
         Ok(data) => data,
         Err(e) => {
-            eprintln!("Path: {}",heart_bmp_path.display());
+            eprintln!("Path: {}", heart_bmp_path.display());
             panic!("{e:#?}");
-        },
+        }
     };
+    let seed = rand::random::<u64>();
     let heart_bmp = tinybmp::Bmp::<'_, BinaryColor>::from_slice(&heart_bmp_data).unwrap();
 
-    let heart = heart_bmp
-        .pixels()
-        .map(|x| x.1)
-        .collect::<Vec<_>>()
-        .chunks(heart_bmp.size().width as usize)
-        .flat_map(|x| {
-            x.chunks(8)
-                .map(|x| {
-                    let mut r = 0u8;
-                    for b in x {
-                        r <<= 1;
-                        if b.is_on() {
-                            r |= 1;
-                        }
-                    }
-                    r <<= 8 - x.len();
-                    r
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+    let heart_image = Image::new(&heart_bmp, Point::zero());
 
-    let mut mask = heart.clone();
-    let mut black_pixel_count = mask.iter().fold(0, |x, y| x + y.count_zeros());
-    let start_black_pixel_count = black_pixel_count;
-
+    let color_map = |x| match x {
+        BinaryColor::On => Color::Black,
+        BinaryColor::Off => Color::White,
+    };
     v.set_refresh(epd_waveshare::prelude::RefreshLut::Quick);
-    while black_pixel_count > 0 {
-        if let Some(x) = keep_going {
-            if !x.load(std::sync::atomic::Ordering::Relaxed) {
+    for i in 1u64..=steps {
+        if let Some(k) = keep_going {
+            if !k.load(std::sync::atomic::Ordering::Relaxed) {
                 return;
             }
         }
-        let burst_size = ((black_pixel_count * max_fade) / (start_black_pixel_count))
-            .max(min_fade);
-        for _ in 0..(burst_size) {
-            if black_pixel_count == 0 {
-                break;
-            }
-            let bit_index = rand::rng()
-                .random_range(0..black_pixel_count)
-                .try_into()
-                .unwrap();
-            flip_nth_bit(false, bit_index, &mut mask);
-            black_pixel_count = black_pixel_count.saturating_sub(1);
-        }
-        let mut new_data = heart.clone();
-
-        overlay_binary(&mut new_data, &mask);
-
-        let pixels = new_data
-            .chunks(heart_bmp.size().width.div_ceil(8) as usize)
-            .flat_map(|rows| {
-                rows.iter()
-                    .flat_map(|x| {
-                        (0..8)
-                            .rev()
-                            .map(|b| {
-                                if ((x >> b) & 1) == 1 {
-                                    Color::White
-                                } else {
-                                    Color::Black
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .take(heart_bmp.size().width as usize)
-                    .collect::<Vec<_>>()
-            });
-        v.get_display()
-            .fill_contiguous(&Rectangle::new(Point::zero(), heart_bmp.size()), pixels)
-            .unwrap();
+        let mut d = HashDisplay::new(v.get_display(), seed, (u64::MAX / steps) * i);
+        let mut c = ColorMapDisplay::new(&mut d, color_map);
+        heart_image.draw(&mut c).unwrap();
 
         v.update_and_display_frame();
     }
+    let mut c = ColorMapDisplay::new(v.get_display(), color_map);
+    heart_image.draw(&mut c).unwrap();
+
+    v.update_and_display_frame();
 }
 
 fn watchdog(trigger: Arc<AtomicBool>, ip: &str) -> JoinHandle<()> {
@@ -166,8 +94,7 @@ use config::Config;
 struct GreeterConfig {
     watched_ip: String,
     heart_bmp_path: String,
-    fade_max_velocity: u32,
-    fade_min_velocity: u32,
+    steps: u64,
 }
 
 pub fn greeter() {
@@ -211,13 +138,7 @@ pub fn greeter() {
             .unwrap();
 
             v.update_and_display_frame();
-            building_image(
-                &mut v,
-                Some(&kim_here),
-                &heart_bpm_path,
-                app.fade_max_velocity,
-                app.fade_min_velocity,
-            );
+            building_image(&mut v, Some(&kim_here), &heart_bpm_path, app.steps);
         } else {
             v.get_display().clear(Color::White).unwrap();
             v.set_refresh(epd_waveshare::prelude::RefreshLut::Full);
