@@ -66,7 +66,7 @@ impl MyDisplay {
             .unwrap();
     }
 
-    pub fn get_display(&mut self) -> &mut epd_waveshare::epd2in13_v2::Display2in13 {
+    pub const fn get_display(&mut self) -> &mut epd_waveshare::epd2in13_v2::Display2in13 {
         &mut self.display
     }
 

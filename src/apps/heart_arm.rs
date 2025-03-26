@@ -40,16 +40,16 @@ fn overlay_binary(under: &mut [u8], over: &[u8]) {
 
 pub fn building_image(
     v: &mut display::MyDisplay,
-    keep_going: Option<Arc<std::sync::atomic::AtomicBool>>,
+    keep_going: Option<&Arc<std::sync::atomic::AtomicBool>>,
     heart_bmp_path: &Path,
-    max_fade: u64,
-    min_fade: u64,
+    max_fade: u32,
+    min_fade: u32,
 ) {
     let heart_bmp_data = match std::fs::read(heart_bmp_path){
         Ok(data) => data,
         Err(e) => {
-            eprintln!("Path: {:#?}", heart_bmp_path);
-            panic!("{:#?}", e);
+            eprintln!("Path: {}",heart_bmp_path.display());
+            panic!("{e:#?}");
         },
     };
     let heart_bmp = tinybmp::Bmp::<'_, BinaryColor>::from_slice(&heart_bmp_data).unwrap();
@@ -82,13 +82,13 @@ pub fn building_image(
 
     v.set_refresh(epd_waveshare::prelude::RefreshLut::Quick);
     while black_pixel_count > 0 {
-        if let Some(ref x) = keep_going {
+        if let Some(x) = keep_going {
             if !x.load(std::sync::atomic::Ordering::Relaxed) {
                 return;
             }
         }
-        let burst_size = ((black_pixel_count * (max_fade as u32)) / (start_black_pixel_count))
-            .max(min_fade as u32);
+        let burst_size = ((black_pixel_count * max_fade) / (start_black_pixel_count))
+            .max(min_fade);
         for _ in 0..(burst_size) {
             if black_pixel_count == 0 {
                 break;
@@ -155,7 +155,7 @@ fn watchdog(trigger: Arc<AtomicBool>, ip: &str) -> JoinHandle<()> {
                 }
             } else {
                 trigger.store(r, std::sync::atomic::Ordering::Relaxed);
-                last_sent_event = Some(r)
+                last_sent_event = Some(r);
             }
         }
     })
@@ -166,8 +166,8 @@ use config::Config;
 struct GreeterConfig {
     watched_ip: String,
     heart_bmp_path: String,
-    fade_max_velocity: u64,
-    fade_min_velocity: u64,
+    fade_max_velocity: u32,
+    fade_min_velocity: u32,
 }
 
 pub fn greeter() {
@@ -196,11 +196,7 @@ pub fn greeter() {
 
         last_kim = !last_kim;
 
-        if !last_kim {
-            v.get_display().clear(Color::White).unwrap();
-            v.set_refresh(epd_waveshare::prelude::RefreshLut::Full);
-            v.update_and_display_frame();
-        } else {
+        if last_kim {
             let font = u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_fub25_tr>();
             let text = "Hallo\nKim!";
 
@@ -217,11 +213,15 @@ pub fn greeter() {
             v.update_and_display_frame();
             building_image(
                 &mut v,
-                Some(kim_here.clone()),
+                Some(&kim_here),
                 &heart_bpm_path,
                 app.fade_max_velocity,
                 app.fade_min_velocity,
             );
+        } else {
+            v.get_display().clear(Color::White).unwrap();
+            v.set_refresh(epd_waveshare::prelude::RefreshLut::Full);
+            v.update_and_display_frame();
         }
     }
 }

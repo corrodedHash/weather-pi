@@ -2,6 +2,11 @@
 name = "weather-pi"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+repository = "https://github.com/corrodedHash/weather-pi"
+description = "Program to interact with a RPi Zero containing a EPD Waveshare E-Ink display"
+keywords = ["Raspberry", "EPD Waveshare"]
+categories = ["embedded"]
 
 [dependencies]
 config = "0.15.11"
