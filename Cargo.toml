@@ -9,6 +9,7 @@ keywords = ["Raspberry", "EPD Waveshare"]
 categories = ["embedded"]
 
 [dependencies]
+chrono = { version = "0.4.40", default-features = false, features = ["alloc", "clock", "now", "std"] }
 config = "0.15.11"
 eg-seven-segment = "0.2.0"
 embedded-dht-rs = { version = "0.4.0", features = ["dht22"] }

@@ -10,5 +10,6 @@ mod effects;
 // mod overlay;
 
 fn main() {
-    apps::heart_arm::greeter();
+    apps::countdown::countdown();
+    // apps::greeter::greeter();
 }
