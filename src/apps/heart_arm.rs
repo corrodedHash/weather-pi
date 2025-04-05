@@ -14,7 +14,7 @@ use embedded_graphics::{
 
 use crate::{
     display,
-    effects::{alpha_display::make_alpha_display, hash_display::HashDisplay},
+    effects::{alpha_display::make_alpha_display, hash_display::make_hash_display},
 };
 
 pub fn building_image(
@@ -45,8 +45,7 @@ pub fn building_image(
         {
             let mut c = v.get_display();
             let mut f = make_alpha_display(&mut c, BinaryColor::Off);
-            let mut d = HashDisplay::new(&mut f, seed, (u64::MAX / steps) * i);
-            // let mut c = ColorMapDisplay::new(&mut d, color_map);
+            let mut d = make_hash_display(&mut f, seed, (u64::MAX / steps) * i);
             heart_image.draw(&mut d).unwrap();
         }
 

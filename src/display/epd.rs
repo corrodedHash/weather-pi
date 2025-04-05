@@ -1,5 +1,6 @@
-use crate::{delay::UnixDelay, effects::color_map_display::ColorMapDisplay};
-use embedded_graphics::pixelcolor::BinaryColor;
+#![allow(dead_code)]
+use crate::{delay::UnixDelay, effects::color_map_display::make_color_map_display};
+use embedded_graphics::{pixelcolor::BinaryColor, prelude::DrawTarget};
 use epd_waveshare::{epd2in13_v2::Display2in13, prelude::WaveshareDisplay};
 use rppal::{
     gpio::{Gpio, InputPin, OutputPin},
@@ -67,12 +68,14 @@ impl MyDisplay {
             .unwrap();
     }
 
-    pub const fn get_display<'a>(&'a mut self) -> ColorMapDisplay<'a, Display2in13, BinaryColor> {
+    pub fn get_display(
+        &'_ mut self,
+    ) -> impl DrawTarget<Color = BinaryColor, Error = core::convert::Infallible> {
         let color_map = |x| match x {
             BinaryColor::On => epd_waveshare::color::Color::Black,
             BinaryColor::Off => epd_waveshare::color::Color::White,
         };
-        ColorMapDisplay::new(&mut self.display, color_map)
+        make_color_map_display(&mut self.display, color_map)
     }
 
     pub fn update_and_display_frame(&mut self) {

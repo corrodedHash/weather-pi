@@ -22,11 +22,11 @@ impl<'a, D: DrawTarget, C: PixelColor, F> FilterMapDisplay<'a, D, C, F>
 where
     F: FnMut(Pixel<C>) -> Option<Pixel<D::Color>>,
 {
-    pub fn new(display: &'a mut D, mapping: F) -> Self {
+    pub const fn new(display: &'a mut D, mapping: F) -> Self {
         Self {
             display,
             mapping,
-            _p: PhantomData::default(),
+            _p: PhantomData,
         }
     }
 }
