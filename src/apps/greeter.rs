@@ -135,11 +135,12 @@ pub fn greeter() {
         if last_kim {
             let font = u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_fub25_tr>();
             let text = "Hallo\nKim!";
+            let text_position = v.get_display().bounding_box().center();
 
             font.render_aligned(
                 text,
                 // v.get_display().bounding_box().center() + Point::new(75, 0),
-                v.get_display().bounding_box().center(),
+                text_position,
                 u8g2_fonts::types::VerticalPosition::Center,
                 u8g2_fonts::types::HorizontalAlignment::Center,
                 u8g2_fonts::types::FontColor::Transparent(BinaryColor::On),
