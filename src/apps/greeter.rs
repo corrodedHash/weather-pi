@@ -183,12 +183,12 @@ pub fn greeter() {
     v.update_and_display_frame();
     let mut connected_ips = vec![];
     loop {
-        let x = chan_out.recv().unwrap();
-        tracing::debug!("{:#?}", x);
         let mut changes_made = false;
 
         if let Ok(x) = chan_out.recv() {
-            handle_event(&mut connected_ips, &mut changes_made, x);
+            tracing::debug!("{:#?}", x);
+
+            changes_made |= handle_event(&mut connected_ips, x);
         } else {
             tracing::error!("Channel closed, program exiting");
             return;
@@ -197,14 +197,15 @@ pub fn greeter() {
         // Siphon out simultaneous network events
         loop {
             match chan_out.recv_timeout(Duration::from_secs_f64(0.3)) {
-                Ok(x) => handle_event(&mut connected_ips, &mut changes_made, x),
-                Err(e) => match e {
-                    std::sync::mpsc::RecvTimeoutError::Timeout => break,
-                    std::sync::mpsc::RecvTimeoutError::Disconnected => {
-                        tracing::error!("Channel closed, program exiting");
-                        return;
-                    }
-                },
+                Ok(x) => {
+                    changes_made |= handle_event(&mut connected_ips, x.clone());
+                    tracing::debug!("{:#?}", x);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    tracing::error!("Channel closed, program exiting");
+                    return;
+                }
             }
         }
         if !changes_made {
@@ -262,21 +263,22 @@ pub fn greeter() {
     }
 }
 
-fn handle_event(connected_ips: &mut Vec<Ipv4Addr>, changes_made: &mut bool, x: NetworkEvent) {
+fn handle_event(connected_ips: &mut Vec<Ipv4Addr>, x: NetworkEvent) -> bool {
     match x.ev {
         NetworkEventType::Connected => {
             if connected_ips.contains(&x.ip) {
-                connected_ips.push(x.ip);
-                *changes_made = true;
-            } else {
                 tracing::warn!("IP {} entered twice", x.ip);
+                return false;
             }
+            connected_ips.push(x.ip);
+            true
         }
         NetworkEventType::Left => {
             if connected_ips.contains(&x.ip) {
                 connected_ips.retain(|v| v != &x.ip);
+                return true;
             }
-            *changes_made = true;
+            false
         }
     }
 }
