@@ -78,9 +78,9 @@ fn watchdog(
         })
         .collect::<Vec<_>>();
     let mut last_sent_events: Vec<Option<bool>> = ips.iter().map(|_| None).collect::<Vec<_>>();
+    let mut debounces = ips.iter().map(|_| 0u8).collect::<Vec<_>>();
     let ips = ips.to_vec();
     std::thread::spawn(move || {
-        let mut debounce_count = 0;
         loop {
             let mut v = match ping_commands
                 .iter_mut()
@@ -96,13 +96,20 @@ fn watchdog(
                 }
             };
 
+            let mut wait_count = 0;
             while v
                 .iter_mut()
                 .any(|c| c.try_wait().is_ok_and(|v| v.is_none()))
             {
+                if wait_count > 0 {
+                    tracing::info!("Waiting for pings #{wait_count}");
+                }
+                wait_count += 1;
                 std::thread::sleep(Duration::from_millis(300));
             }
             for (index, mut c) in v.into_iter().enumerate() {
+                let last_sent_event = last_sent_events.get_mut(index).unwrap();
+                let debounce_count = debounces.get_mut(index).unwrap();
                 let result = match c.wait() {
                     Ok(e) => e,
                     Err(err) => {
@@ -111,14 +118,14 @@ fn watchdog(
                     }
                 };
                 let r = result.success();
-                let send_event: bool = last_sent_events.get(index).unwrap().is_none_or(|l| {
+                let send_event: bool = last_sent_event.is_none_or(|l| {
                     if l == r {
-                        debounce_count = 0;
+                        *debounce_count = 0;
                         false
                     } else {
-                        debounce_count += 1;
-                        if debounce_count > 5 {
-                            debounce_count = 0;
+                        *debounce_count += 1;
+                        if *debounce_count > 5 {
+                            *debounce_count = 0;
                             true
                         } else {
                             false
@@ -126,21 +133,20 @@ fn watchdog(
                     }
                 });
                 if send_event {
-                    if channel
-                        .send(NetworkEvent {
-                            ip: *ips.get(index).unwrap(),
-                            ev: if r {
-                                NetworkEventType::Connected
-                            } else {
-                                NetworkEventType::Left
-                            },
-                        })
-                        .is_err()
-                    {
+                    let event = NetworkEvent {
+                        ip: *ips.get(index).unwrap(),
+                        ev: if r {
+                            NetworkEventType::Connected
+                        } else {
+                            NetworkEventType::Left
+                        },
+                    };
+                    tracing::debug!("{:#?}", event);
+                    if channel.send(event).is_err() {
                         tracing::error!("Channel closed, thread returning");
                         return;
                     }
-                    *last_sent_events.get_mut(index).unwrap() = Some(r);
+                    *last_sent_event = Some(r);
                 }
             }
         }
@@ -186,9 +192,7 @@ pub fn greeter() {
         let mut changes_made = false;
 
         if let Ok(x) = chan_out.recv() {
-            tracing::debug!("{:#?}", x);
-
-            changes_made |= handle_event(&mut connected_ips, x);
+            changes_made |= handle_event(&mut connected_ips, &x);
         } else {
             tracing::error!("Channel closed, program exiting");
             return;
@@ -198,8 +202,7 @@ pub fn greeter() {
         loop {
             match chan_out.recv_timeout(Duration::from_secs_f64(0.3)) {
                 Ok(x) => {
-                    changes_made |= handle_event(&mut connected_ips, x.clone());
-                    tracing::debug!("{:#?}", x);
+                    changes_made |= handle_event(&mut connected_ips, &x);
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -263,7 +266,7 @@ pub fn greeter() {
     }
 }
 
-fn handle_event(connected_ips: &mut Vec<Ipv4Addr>, x: NetworkEvent) -> bool {
+fn handle_event(connected_ips: &mut Vec<Ipv4Addr>, x: &NetworkEvent) -> bool {
     match x.ev {
         NetworkEventType::Connected => {
             if connected_ips.contains(&x.ip) {
