@@ -11,6 +11,14 @@ mod effects;
 // mod overlay;
 
 fn main() {
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .finish();
+
+    if tracing::subscriber::set_global_default(subscriber).is_err() {
+        eprintln!("Unable to set global default subscriber");
+        return;
+    }
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() < 2 {

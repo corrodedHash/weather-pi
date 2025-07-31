@@ -48,7 +48,7 @@ fn dickbutt(v: &mut MyDisplay, dickbutt_path: &Path) {
     let dickbutt_bmp_data = match std::fs::read(dickbutt_path) {
         Ok(data) => data,
         Err(e) => {
-            eprintln!("Path: {}", dickbutt_path.display());
+            tracing::error!("Path: {}", dickbutt_path.display());
             panic!("{e:#?}");
         }
     };

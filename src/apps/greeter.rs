@@ -22,7 +22,7 @@ pub fn building_image(v: &mut display::MyDisplay, heart_bmp_path: &Path, steps: 
     let heart_bmp_data = match std::fs::read(heart_bmp_path) {
         Ok(data) => data,
         Err(e) => {
-            eprintln!("Path: {}", heart_bmp_path.display());
+            tracing::error!("Path: {}", heart_bmp_path.display());
             panic!("{e:#?}");
         }
     };
@@ -89,7 +89,9 @@ fn watchdog(
             {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("Could not start ping command: {e}");
+                    tracing::error!("Could not start ping command: {e}");
+                    tracing::error!("Sleeping for 120 seconds");
+                    std::thread::sleep(Duration::from_secs(120));
                     continue;
                 }
             };
@@ -104,38 +106,40 @@ fn watchdog(
                 let result = match c.wait() {
                     Ok(e) => e,
                     Err(err) => {
-                        eprintln!("Error running ping command to {}: {err}", ips[index]);
+                        tracing::error!("Error running ping command to {}: {err}", ips[index]);
                         return;
                     }
                 };
                 let r = result.success();
-                if let Some(l) = *last_sent_events.get(index).unwrap() {
+                let send_event: bool = last_sent_events.get(index).unwrap().is_none_or(|l| {
                     if l == r {
                         debounce_count = 0;
+                        false
                     } else {
                         debounce_count += 1;
                         if debounce_count > 5 {
                             debounce_count = 0;
-                            channel.send(NetworkEvent {
-                                ip: *ips.get(index).unwrap(),
-                                ev: if r {
-                                    NetworkEventType::Connected
-                                } else {
-                                    NetworkEventType::Left
-                                },
-                            });
-                            *last_sent_events.get_mut(index).unwrap() = Some(r);
+                            true
+                        } else {
+                            false
                         }
                     }
-                } else {
-                    channel.send(NetworkEvent {
-                        ip: *ips.get(index).unwrap(),
-                        ev: if r {
-                            NetworkEventType::Connected
-                        } else {
-                            NetworkEventType::Left
-                        },
-                    });
+                });
+                if send_event {
+                    if channel
+                        .send(NetworkEvent {
+                            ip: *ips.get(index).unwrap(),
+                            ev: if r {
+                                NetworkEventType::Connected
+                            } else {
+                                NetworkEventType::Left
+                            },
+                        })
+                        .is_err()
+                    {
+                        tracing::error!("Channel closed, thread returning");
+                        return;
+                    }
                     *last_sent_events.get_mut(index).unwrap() = Some(r);
                 }
             }
@@ -166,7 +170,7 @@ pub fn greeter() {
 
         config.try_deserialize().unwrap()
     };
-    dbg!(&app);
+    tracing::info!("{:#?}", &app);
     let heart_bpm_path = PathBuf::from(app.heart_bmp_path);
 
     let (chan_in, chan_out) = std::sync::mpsc::sync_channel(20);
@@ -180,9 +184,31 @@ pub fn greeter() {
     let mut connected_ips = vec![];
     loop {
         let x = chan_out.recv().unwrap();
-        match x.ev {
-            NetworkEventType::Connected => connected_ips.push(x.ip),
-            NetworkEventType::Left => connected_ips.retain(|v| v != &x.ip),
+        tracing::debug!("{:#?}", x);
+        let mut changes_made = false;
+
+        if let Ok(x) = chan_out.recv() {
+            handle_event(&mut connected_ips, &mut changes_made, x);
+        } else {
+            tracing::error!("Channel closed, program exiting");
+            return;
+        }
+
+        // Siphon out simultaneous network events
+        loop {
+            match chan_out.recv_timeout(Duration::from_secs_f64(0.3)) {
+                Ok(x) => handle_event(&mut connected_ips, &mut changes_made, x),
+                Err(e) => match e {
+                    std::sync::mpsc::RecvTimeoutError::Timeout => break,
+                    std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                        tracing::error!("Channel closed, program exiting");
+                        return;
+                    }
+                },
+            }
+        }
+        if !changes_made {
+            continue;
         }
 
         if connected_ips.is_empty() {
@@ -232,6 +258,25 @@ pub fn greeter() {
 
             v.update_and_display_frame();
             building_image(&mut v, &heart_bpm_path, app.steps);
+        }
+    }
+}
+
+fn handle_event(connected_ips: &mut Vec<Ipv4Addr>, changes_made: &mut bool, x: NetworkEvent) {
+    match x.ev {
+        NetworkEventType::Connected => {
+            if connected_ips.contains(&x.ip) {
+                connected_ips.push(x.ip);
+                *changes_made = true;
+            } else {
+                tracing::warn!("IP {} entered twice", x.ip);
+            }
+        }
+        NetworkEventType::Left => {
+            if connected_ips.contains(&x.ip) {
+                connected_ips.retain(|v| v != &x.ip);
+            }
+            *changes_made = true;
         }
     }
 }

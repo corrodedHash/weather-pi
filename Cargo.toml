@@ -1,6 +1,6 @@
 [package]
 name = "weather-pi"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/corrodedHash/weather-pi"
@@ -10,7 +10,7 @@ categories = ["embedded"]
 
 [dependencies]
 chrono = { version = "0.4.40", default-features = false, features = ["alloc", "clock", "now", "std"] }
-config = "0.15.11"
+config = { version = "0.15.11", default-features = false, features = ["toml"] }
 eg-seven-segment = "0.2.0"
 embedded-dht-rs = { version = "0.4.0", features = ["dht22"] }
 embedded-graphics = "0.8.1"
@@ -23,6 +23,8 @@ rppal = { version = "0.22.1", features = ["hal"] }
 serde = "1.0.219"
 serde_derive = "1.0.219"
 tinybmp = "0.6.0"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
 u8g2-fonts = { version = "0.6.0", features = ["embedded_graphics_textstyle"] }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
