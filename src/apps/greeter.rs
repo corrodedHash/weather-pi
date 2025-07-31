@@ -1,6 +1,7 @@
 use std::{
+    net::Ipv4Addr,
     path::{Path, PathBuf},
-    sync::{Arc, atomic::AtomicBool},
+    process::Child,
     thread::JoinHandle,
     time::Duration,
 };
@@ -17,12 +18,7 @@ use crate::{
     effects::{alpha_display::make_alpha_display, hash_display::make_hash_display},
 };
 
-pub fn building_image(
-    v: &mut display::MyDisplay,
-    keep_going: Option<&Arc<std::sync::atomic::AtomicBool>>,
-    heart_bmp_path: &Path,
-    steps: u64,
-) {
+pub fn building_image(v: &mut display::MyDisplay, heart_bmp_path: &Path, steps: u64) {
     let heart_bmp_data = match std::fs::read(heart_bmp_path) {
         Ok(data) => data,
         Err(e) => {
@@ -37,11 +33,6 @@ pub fn building_image(
 
     v.set_refresh(epd_waveshare::prelude::RefreshLut::Quick);
     for i in 1u64..=steps {
-        if let Some(k) = keep_going {
-            if !k.load(std::sync::atomic::Ordering::Relaxed) {
-                return;
-            }
-        }
         {
             let mut c = v.get_display();
             let mut f = make_alpha_display(&mut c, BinaryColor::Off);
@@ -60,31 +51,93 @@ pub fn building_image(
     v.update_and_display_frame();
 }
 
-fn watchdog(trigger: Arc<AtomicBool>, ip: &str) -> JoinHandle<()> {
-    let ip = String::from(ip);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NetworkEventType {
+    Connected,
+    Left,
+}
+#[derive(Debug, Clone)]
+struct NetworkEvent {
+    ip: std::net::Ipv4Addr,
+    ev: NetworkEventType,
+}
+
+fn watchdog(
+    channel: std::sync::mpsc::SyncSender<NetworkEvent>,
+    ips: &[std::net::Ipv4Addr],
+) -> JoinHandle<()> {
+    let mut ping_commands = ips
+        .iter()
+        .map(|x| {
+            let mut c = std::process::Command::new("ping");
+            c.arg("-c1")
+                .arg("-W0.2")
+                .arg(x.to_string())
+                .stdout(std::process::Stdio::piped());
+            c
+        })
+        .collect::<Vec<_>>();
+    let mut last_sent_events: Vec<Option<bool>> = ips.iter().map(|_| None).collect::<Vec<_>>();
+    let ips = ips.to_vec();
     std::thread::spawn(move || {
         let mut debounce_count = 0;
-        let mut last_sent_event = None;
         loop {
-            let a = std::process::Command::new("ping")
-                .arg("-c1")
-                .arg("-W0.2")
-                .arg(&ip)
-                .output()
-                .expect("failed to execute process");
-            let r = a.status.success();
-            if let Some(l) = last_sent_event {
-                if l != r {
-                    debounce_count += 1;
-                    if debounce_count > 5 {
-                        debounce_count = 0;
-                        trigger.store(r, std::sync::atomic::Ordering::Relaxed);
-                        last_sent_event = Some(r);
-                    }
+            let mut v = match ping_commands
+                .iter_mut()
+                .map(std::process::Command::spawn)
+                .collect::<std::io::Result<Vec<Child>>>()
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Could not start ping command: {e}");
+                    continue;
                 }
-            } else {
-                trigger.store(r, std::sync::atomic::Ordering::Relaxed);
-                last_sent_event = Some(r);
+            };
+
+            while v
+                .iter_mut()
+                .any(|c| c.try_wait().is_ok_and(|v| v.is_none()))
+            {
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            for (index, mut c) in v.into_iter().enumerate() {
+                let result = match c.wait() {
+                    Ok(e) => e,
+                    Err(err) => {
+                        eprintln!("Error running ping command to {}: {err}", ips[index]);
+                        return;
+                    }
+                };
+                let r = result.success();
+                if let Some(l) = *last_sent_events.get(index).unwrap() {
+                    if l == r {
+                        debounce_count = 0;
+                    } else {
+                        debounce_count += 1;
+                        if debounce_count > 5 {
+                            debounce_count = 0;
+                            channel.send(NetworkEvent {
+                                ip: *ips.get(index).unwrap(),
+                                ev: if r {
+                                    NetworkEventType::Connected
+                                } else {
+                                    NetworkEventType::Left
+                                },
+                            });
+                            *last_sent_events.get_mut(index).unwrap() = Some(r);
+                        }
+                    }
+                } else {
+                    channel.send(NetworkEvent {
+                        ip: *ips.get(index).unwrap(),
+                        ev: if r {
+                            NetworkEventType::Connected
+                        } else {
+                            NetworkEventType::Left
+                        },
+                    });
+                    *last_sent_events.get_mut(index).unwrap() = Some(r);
+                }
             }
         }
     })
@@ -93,7 +146,7 @@ fn watchdog(trigger: Arc<AtomicBool>, ip: &str) -> JoinHandle<()> {
 use config::Config;
 #[derive(Debug, Default, serde_derive::Deserialize, PartialEq, Eq)]
 struct GreeterConfig {
-    watched_ip: String,
+    watched_ips: Vec<Ipv4Addr>,
     heart_bmp_path: String,
     steps: u64,
 }
@@ -101,9 +154,9 @@ struct GreeterConfig {
 pub fn greeter() {
     let app: GreeterConfig = if cfg!(target_arch = "x86_64") {
         GreeterConfig {
-            watched_ip: "192.168.178.29".to_owned(),
+            watched_ips: vec!["192.168.178.29".parse().unwrap()],
             heart_bmp_path: "./assets/heart_full.bmp".to_owned(),
-            steps: 100,
+            steps: 10,
         }
     } else {
         let config = Config::builder()
@@ -115,31 +168,41 @@ pub fn greeter() {
     };
     dbg!(&app);
     let heart_bpm_path = PathBuf::from(app.heart_bmp_path);
-    let kim_here = Arc::new(AtomicBool::new(false));
-    let mut last_kim = false;
 
-    let _w = watchdog(kim_here.clone(), &app.watched_ip);
+    let (chan_in, chan_out) = std::sync::mpsc::sync_channel(20);
+
+    let _w = watchdog(chan_in, &app.watched_ips);
 
     let mut v = display::MyDisplay::default();
 
     v.get_display().clear(BinaryColor::Off).unwrap();
     v.update_and_display_frame();
+    let mut connected_ips = vec![];
     loop {
-        if kim_here.load(std::sync::atomic::Ordering::Relaxed) == last_kim {
-            std::thread::sleep(Duration::from_millis(500));
-            continue;
+        let x = chan_out.recv().unwrap();
+        match x.ev {
+            NetworkEventType::Connected => connected_ips.push(x.ip),
+            NetworkEventType::Left => connected_ips.retain(|v| v != &x.ip),
         }
 
-        last_kim = !last_kim;
-
-        if last_kim {
+        if connected_ips.is_empty() {
+            v.get_display().clear(BinaryColor::Off).unwrap();
+            v.set_refresh(epd_waveshare::prelude::RefreshLut::Full);
+            v.update_and_display_frame();
+        } else {
+            if connected_ips.len() != 1 {
+                continue;
+            }
             let font = u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_fub25_tr>();
             let text = "Hallo\nKim!";
             let text_position = v.get_display().bounding_box().center();
 
+            v.get_display().clear(BinaryColor::Off).unwrap();
+            v.set_refresh(epd_waveshare::prelude::RefreshLut::Full);
+            v.update_and_display_frame();
+
             font.render_aligned(
                 text,
-                // v.get_display().bounding_box().center() + Point::new(75, 0),
                 text_position,
                 u8g2_fonts::types::VerticalPosition::Center,
                 u8g2_fonts::types::HorizontalAlignment::Center,
@@ -148,12 +211,27 @@ pub fn greeter() {
             )
             .unwrap();
 
+            // let tiny_font =
+            //     u8g2_fonts::FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_fub11_tr>();
+            // let ip_position = v.get_display().bounding_box().bottom_right().unwrap();
+            // tiny_font
+            //     .render_aligned(
+            //         connected_ips
+            //             .iter()
+            //             .map(std::string::ToString::to_string)
+            //             .intersperse("\n".to_owned())
+            //             .collect::<String>()
+            //             .as_str(),
+            //         ip_position,
+            //         u8g2_fonts::types::VerticalPosition::Bottom,
+            //         u8g2_fonts::types::HorizontalAlignment::Right,
+            //         u8g2_fonts::types::FontColor::Transparent(BinaryColor::On),
+            //         &mut v.get_display(),
+            //     )
+            //     .unwrap();
+
             v.update_and_display_frame();
-            building_image(&mut v, Some(&kim_here), &heart_bpm_path, app.steps);
-        } else {
-            v.get_display().clear(BinaryColor::Off).unwrap();
-            v.set_refresh(epd_waveshare::prelude::RefreshLut::Full);
-            v.update_and_display_frame();
+            building_image(&mut v, &heart_bpm_path, app.steps);
         }
     }
 }

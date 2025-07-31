@@ -40,15 +40,15 @@ impl MyDisplay {
 
     pub fn update_and_display_frame(&mut self) {
         self.window.update(&self.display);
-        if self
-            .window
-            .events()
-            .inspect(|x| {
-                dbg!(x);
-            })
-            .any(|event| event == embedded_graphics_simulator::SimulatorEvent::Quit)
-        {
-            panic!("Exit please");
-        }
+        // if self
+        //     .window
+        //     .events()
+        //     .inspect(|x| {
+        //         dbg!(x);
+        //     })
+        //     .any(|event| event == embedded_graphics_simulator::SimulatorEvent::Quit)
+        // {
+        //     panic!("Exit please");
+        // }
     }
 }

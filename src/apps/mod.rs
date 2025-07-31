@@ -1,2 +1,2 @@
-pub mod greeter;
 pub mod countdown;
+pub mod greeter;
