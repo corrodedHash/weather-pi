@@ -2,79 +2,65 @@
 
 ## Purpose
 
-Keeps the deployed application current without physical access, while guaranteeing that only signed, newer, intact releases are installed and that a failed update never leaves the device unusable.
+Keeps the deployed application current without physical access, while guaranteeing that only signed, newer, intact packages are installed, that a failed update is rolled back automatically, and that recovery does not depend on the application being healthy.
 
 ## ADDED Requirements
 
-### Requirement: Signature verification before installation
+### Requirement: Trusted installation source
 
-The updater SHALL verify a detached signature over the release manifest against a public key embedded in the installed software, and MUST refuse to install any artifact when verification fails.
+The updater SHALL install application packages only from the project repository whose metadata verifies against the archive key shipped in the image, and MUST refuse a repository, package, or expired metadata that does not verify.
 
-#### Scenario: Unsigned manifest
+#### Scenario: Unsigned or tampered metadata
 
-- **WHEN** the downloaded manifest has no signature or an invalid one
-- **THEN** the updater installs nothing, reports an error, and leaves the running binary unchanged
+- **WHEN** the repository metadata fails signature or hash verification
+- **THEN** the updater installs nothing, records the failure, and leaves the running application unchanged
 
 #### Scenario: Unknown signing key
 
-- **WHEN** the manifest is signed by a key that is not embedded in the binary
-- **THEN** the updater rejects the release
+- **WHEN** the metadata is signed by a key that is not present in the installed keyring
+- **THEN** the updater refuses the repository
 
-#### Scenario: Key rotation
+### Requirement: No automatic downgrade
 
-- **WHEN** the binary embeds two public keys and the manifest is validly signed by the second key
-- **THEN** the updater accepts the release
+The updater SHALL install only a version strictly newer than the installed one, and MUST NOT downgrade except through the explicit rollback action.
 
-### Requirement: Artifact integrity
+#### Scenario: Repository offers an older version
 
-The updater SHALL verify the SHA-256 and size of the downloaded artifact against the signed manifest before installing it.
+- **WHEN** the available version is lower than or equal to the installed version
+- **THEN** the updater installs nothing and reports that no update is available
 
-#### Scenario: Truncated download
+#### Scenario: Metadata replay
 
-- **WHEN** a download is incomplete or its hash differs from the manifest
-- **THEN** the updater discards the download and keeps the current installation
+- **WHEN** a validly signed but expired metadata snapshot is served
+- **THEN** apt refuses it and the updater reports a failure without changing the installation
 
-### Requirement: Anti-rollback
+### Requirement: Health-gated update
 
-The updater SHALL persist the sequence number of the last installed release and MUST NOT install a release whose sequence number is less than or equal to it, unless an explicit force option is used by an operator.
-
-#### Scenario: Replayed older release
-
-- **WHEN** a validly signed manifest with the same or lower sequence number is offered
-- **THEN** the updater declines to install it without the force option
-
-#### Scenario: Newer release
-
-- **WHEN** a validly signed manifest has a higher sequence number than the recorded one
-- **THEN** the updater proceeds with installation
-
-### Requirement: Atomic installation and health check
-
-The updater SHALL replace the application binary atomically and SHALL confirm that the restarted service is healthy before committing the update.
+After installing a newer package the updater SHALL restart the application and require it to become active and to keep signalling the systemd watchdog within the health window.
 
 #### Scenario: Successful update
 
-- **WHEN** a verified release is installed and the restarted service makes progress within the health window
-- **THEN** the new binary remains in place, the sequence number is recorded, and the updater reports success
+- **WHEN** the restarted service becomes active and keeps its watchdog alive for the health window
+- **THEN** the new version stays installed, the last-good version is recorded, and the run reports success
 
-#### Scenario: New build crashes on start
+#### Scenario: New build crashes or hangs
 
-- **WHEN** the restarted service exits or writes no heartbeat within the health window
-- **THEN** the updater restores the previous binary, restarts it, and reports a failed update
+- **WHEN** the restarted service fails, exits, or misses the watchdog within the health window
+- **THEN** the updater reinstalls the last-good version, restarts the service, records the failed version, and reports failure
 
-### Requirement: Manual recovery
+### Requirement: Updater isolation
 
-The updater SHALL provide commands to check for updates, report the installed and available versions, and roll back to the previously installed binary.
+The updater SHALL be delivered and run independently of the application, and an application package MUST NOT be able to change the updater, its units, or its apt configuration.
 
-#### Scenario: Status query
+#### Scenario: Broken application release
 
-- **WHEN** an operator runs the status command
-- **THEN** it prints the running version, last check time, last result, and the available version if known
+- **WHEN** an application package installs a binary that cannot run
+- **THEN** the updater still starts, reports status, and can roll back
 
-#### Scenario: Operator rollback
+#### Scenario: Automatic upgrade scope
 
-- **WHEN** an operator requests a rollback and a previous binary is available
-- **THEN** the previous binary is restored, the service restarts, and the failure is reported
+- **WHEN** the scheduled update runs
+- **THEN** it upgrades only the application package and leaves the updater package at its installed version
 
 ### Requirement: Scheduled checks
 
@@ -85,7 +71,39 @@ The system SHALL check for updates on a recurring schedule with randomized delay
 - **WHEN** the timer triggers while an update is already in progress
 - **THEN** the new run exits without modifying the installation
 
-#### Scenario: Offline device
+#### Scenario: Device offline
 
-- **WHEN** the device has no network or the release endpoint is unreachable
-- **THEN** the check fails quietly, records the failure, and retries on the next schedule without affecting the running service
+- **WHEN** the device has no network or the repository is unreachable
+- **THEN** the run fails quietly, records the failure, and retries on the next schedule without affecting the running service
+
+### Requirement: Operator recovery commands
+
+The updater SHALL provide commands to check for updates, report versions and last result, and roll back to the recorded last-good version, usable over SSH while the application is down.
+
+#### Scenario: Status query
+
+- **WHEN** an operator runs the status command
+- **THEN** it prints the installed version, the available version, the last-good version, and the last result and time
+
+#### Scenario: Operator rollback
+
+- **WHEN** an operator requests a rollback and a last-good version is recorded
+- **THEN** that version is reinstalled, the service restarts, and the result is reported; with no record, the command refuses and changes nothing
+
+### Requirement: Interrupted update recovery
+
+The system SHALL complete or report an interrupted package installation at boot before starting the application, so a power loss during an update does not leave the device unusable.
+
+#### Scenario: Power loss during installation
+
+- **WHEN** the device reboots with a pending package configuration
+- **THEN** the boot sequence configures the pending package before the application starts, and the application runs the installed version
+
+### Requirement: OS update boundary
+
+The updater SHALL manage only the project's application package; Debian package security updates MUST remain with `unattended-upgrades`, and the project origin MUST be excluded from that automatic path.
+
+#### Scenario: Security update runs
+
+- **WHEN** `unattended-upgrades` applies Debian security updates
+- **THEN** it does not upgrade or downgrade the application package, and the display keeps running

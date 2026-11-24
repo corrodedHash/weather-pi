@@ -6,9 +6,10 @@ See `proposal.md`. Constraints that shape the approach:
 
 - The existing binary targets `arm-unknown-linux-gnueabihf` (armv6). Raspberry Pi OS 32-bit runs on Zero, Zero W, and Zero 2 W, so one image can serve all three; a 64-bit image would exclude the original Zero.
 - The device is headless, connects over WiFi, and sits behind NAT.
-- The release pipeline produces signed artifacts and a manifest; the image build must consume, not rebuild, them.
+- The release pipeline produces signed packages and an apt repository; the image build must consume them, not rebuild them.
 - The current unit file is not startable: it passes no app argument and runs as root with `chrt`.
 - Trixie uses NetworkManager for WiFi; older Bookworm recipes based on `wpa_supplicant.conf` will not apply.
+- apt is already part of the base system, so installing packages needs no new mechanism.
 
 ## Goals / Non-Goals
 
@@ -16,13 +17,15 @@ See `proposal.md`. Constraints that shape the approach:
 
 - One armhf image that works on every supported model.
 - First boot to a running service with only a provisioning file added to the boot partition.
+- An installed update path that works without further setup, using the same verification as a manual install.
 - Image builds reproducible enough to identify exactly what shipped.
 
 **Non-Goals:**
 
 - 64-bit image variants.
-- Whole-disk A/B updates or signed boot (RAUC); the app binary updater covers the software we change most.
+- Whole-disk A/B updates or signed boot (RAUC); the package update path covers the software we change most.
 - Multiple device profiles or a fleet provisioning server.
+- Changing the repository configuration on an existing device; the image ships it once and the updater package owns it afterwards.
 
 ## Decisions
 
@@ -34,7 +37,31 @@ Pin the pi-gen revision in the image task so the base does not move under us.
 
 ### One armhf image, both architectures still built
 
-Because 32-bit userspace runs on armv8, a single armhf image covers the whole Zero family. The release pipeline still builds aarch64 so the device can move to 64-bit later without changing the update format.
+Because 32-bit userspace runs on armv8, a single armhf image covers the whole Zero family. The release pipeline still builds arm64 so the device can move to 64-bit later without changing the update format.
+
+### Install packages from the signed repository, not from a tarball
+
+The stage adds the archive key to `/usr/share/keyrings`, writes the `signed-by` source, and runs `apt-get install weather-pi=<version> weather-pi-updater=<version>` inside the chroot. This exercises exactly the path the device uses later: if the repository metadata or a package hash does not verify, the image build fails.
+
+Alternatives:
+
+- **Install a verified tarball**: duplicates the install path, needs a second trust anchor (`update.pub`/minisign), and gives the image and the device different notions of what is installed.
+- **Copy `.deb` files in and `dpkg -i` them**: skips the repository signature, leaving the image's trust story weaker than the device's.
+
+The pinned version is recorded as an argument to `mise run image`, so an image can be rebuilt from an older repository state while the pool still holds that version.
+
+### Configuration layout
+
+- `/etc/apt/sources.list.d/weather-pi.list` — `signed-by=` source for the project repository.
+- `/etc/apt/preferences.d/weather-pi` — `o=weather-pi` pin, priority 500.
+- `/etc/apt/apt.conf.d/90weather-pi` — `Acquire::Check-Valid-Until`, `APT::Keep-Downloaded-Packages`, retries, lock timeout.
+- `/usr/share/keyrings/weather-pi-archive.gpg` — archive public key, from `weather-pi-archive-keyring`.
+- `/etc/weather-pi/<app>.toml` — conffiles installed by the application package.
+- `/usr/share/weather-pi/*.bmp` — assets from the application package.
+- `/var/lib/weather-pi/` — updater state directory.
+- `/etc/weather-pi/build-info` — base release, pi-gen revision, repository `Date`, package versions.
+
+`/etc/weather-pi/update.pub` from the earlier design is removed; the apt keyring is the only trust anchor.
 
 ### First boot reads `/boot/firmware/weather-pi.cfg`
 
@@ -50,47 +77,47 @@ It then deletes the secret fields from the boot partition and marks itself done 
 
 Alternative considered: Raspberry Pi Imager's `custom.toml` preconfiguration. Rejected because the workflow is `dd`, not Imager, and because it does not cover tunnel settings.
 
+### Update readiness
+
+The image enables `weather-pi-update.timer`, ships an empty `/var/cache/apt/archives` with `Keep-Downloaded-Packages` on, and enables `weather-pi-recover.service`. The updater package is installed but not upgraded automatically; the image is the initial delivery vehicle, after which the updater manages the application and the operator manages the updater.
+
+`unattended-upgrades` is configured to ignore the `weather-pi` origin, so there is exactly one automatic path per package class.
+
 ### Minimal package set
 
-Install only: `ca-certificates`, `curl`, `iputils-ping` (the greeter shells out to `ping`), `openssh-client` and `openssh-server` for the tunnel, `zstd` at build time only, and the base Lite packages. Enable SPI with `raspi-config nonint do_spi 0` in the stage. No compilers or development tools in the image.
+Install only: `ca-certificates`, `curl`, `iputils-ping` (the greeter shells out to `ping`), `openssh-client` and `openssh-server` for the tunnel, `zstd` at build time only, and the base Lite packages. `apt` and `gpgv` come from the base and are sufficient for verification. No compilers or development tools in the image.
 
 ### Runtime hardening
 
-`User=weather-pi`, `SupplementaryGroups=spi gpio`, `Restart=on-failure`, `StateDirectory=weather-pi`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, and `ReadWritePaths=/var/lib/weather-pi`. Do not set a capability bounding set that would break `/dev/gpiochip` or `/dev/spidev` access. Drop `chrt`; the app has no realtime requirement and cannot take `CAP_SYS_NICE`.
-
-### Configuration layout
-
-- `/etc/weather-pi/<app>.toml` — templates installed by the package.
-- `/usr/share/weather-pi/*.bmp` — assets.
-- `/etc/weather-pi/update.pub` — release public key.
-- `/var/lib/weather-pi/` — update state and logs.
-
-The binary reads `/etc/weather-pi` first and falls back to `/etc/skyscreen` for one release.
+`User=weather-pi`, `SupplementaryGroups=spi gpio`, `Type=notify`, `WatchdogSec=60`, `Restart=on-failure`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`. No `ReadWritePaths` is needed now that the application only signals systemd and no longer writes a heartbeat. Do not set a capability bounding set that would break `/dev/gpiochip` or `/dev/spidev` access. Drop `chrt`; the app has no realtime requirement and cannot take `CAP_SYS_NICE`.
 
 ### Image integrity
 
-The image task downloads the release manifest, verifies it against the public key, downloads the armv6 archive, verifies its hash, and installs it. The build then writes `/etc/weather-pi/build-info` with the base release, pi-gen revision, release version, and installed package versions. Output is `.img.zst`, `SHA256SUMS`, and a detached signature.
+The image task verifies the repository `InRelease` against the archive key, then builds; the chroot install verifies again. The output is `.img.zst`, `SHA256SUMS`, and a detached minisign signature (minisign is used only for the image, not for packages). `build-info` records what was installed and from which repository state.
 
 ### Reproducibility level
 
-The image is rebuildable but not bit-identical: Debian package repositories move and pi-gen timestamps the filesystem. Pinning pi-gen and recording package versions is the practical middle ground; `SOURCE_DATE_EPOCH` is set to make timestamps stable where pi-gen honors it.
+The image is rebuildable but not bit-identical: Debian package repositories move and pi-gen timestamps the filesystem. Pinning pi-gen, pinning the project packages, and recording package versions and the repository `Date` is the practical middle ground; `SOURCE_DATE_EPOCH` is set to make timestamps stable where pi-gen honors it.
 
 ## Risks / Trade-offs
 
 - **Building images needs privileged Docker/loop devices** → document the requirement and keep the task opt-in; CI image builds are manual initially.
+- **Repository unreachable during a build** → the build fails rather than producing an image with an unverified payload; an offline mode that consumes previously downloaded packages can be added later.
+- **Pinned version disappears after pruning** → repository retention is five versions; rebuilding an ancient image needs the pool restored from the GitHub Release assets, which is documented.
 - **NetworkManager behavior differs across releases** → pin the release branch (`trixie`), test the firstboot path on real hardware, and keep the WiFi step idempotent.
 - **Secrets left on the FAT partition if first boot never completes** → the sentinel is written last; document that the provisioning file should only contain a password that is rotated if the device is lost.
 - **Image grows over time** → apt cleanup and no docs/recommends; assert an upper size bound in the task.
-- **`ProtectSystem=strict` can break future device access** → keep the list of writable paths explicit and covered by the on-device smoke test.
+- **`ProtectSystem=strict` can break future device access** → keep the writable-path list explicit and covered by the on-device smoke test.
 
 ## Migration Plan
 
 1. Build a candidate image with the current release and boot it on the Zero.
-2. Confirm WiFi, service start, display output, and SSH over the tunnel.
-3. Flash a second card for the Zero 2 W target (same image).
-4. Publish the image only after both boots succeed.
+2. Confirm WiFi, service start, display output, `apt-get update`, and SSH over the tunnel.
+3. Confirm `weather-pi-update --check` is a no-op and the timer is enabled.
+4. Flash a second card for the Zero 2 W target (same image).
+5. Publish the image only after both boots succeed.
 
-Rollback is re-flashing the previous published image; the app-level rollback is handled by the updater.
+Rollback is re-flashing the previous published image; package-level rollback is handled by the updater.
 
 ## Open Questions
 

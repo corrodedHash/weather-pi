@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Provides a reproducible bootable image that brings a blank SD card to a working, remotely reachable device without manual installation and without embedding secrets.
+Provides a reproducible bootable image that brings a blank SD card to a working, remotely reachable, updatable device without manual installation and without embedding secrets.
 
 ## ADDED Requirements
 
@@ -54,32 +54,51 @@ First-boot provisioning SHALL be safe to re-run and SHALL NOT overwrite an exist
 
 ### Requirement: Installed layout
 
-The image SHALL install the binary, unit, assets, and configuration in fixed documented paths, and the application MUST start using the shipped sample configuration.
+The image SHALL install the application and updater packages in fixed documented paths, and the application MUST start using the shipped sample configuration.
 
 #### Scenario: Installed paths
 
 - **WHEN** the image is mounted
-- **THEN** the binary is at `/usr/bin/weather-pi`, assets under `/usr/share/weather-pi`, configuration under `/etc/weather-pi`, and the unit at `/etc/systemd/system/weather-pi.service`
+- **THEN** the binary is at `/usr/bin/weather-pi`, assets under `/usr/share/weather-pi`, configuration under `/etc/weather-pi`, the updater at `/usr/sbin/weather-pi-update`, and the unit at `/etc/systemd/system/weather-pi.service`
 
 #### Scenario: Sample config is valid
 
 - **WHEN** the service starts with the shipped sample configuration
 - **THEN** the configuration parses and the application starts instead of exiting with a deserialization error
 
-### Requirement: Verified payload
+### Requirement: Verified package payload
 
-The image build SHALL install only a release artifact whose manifest signature and SHA-256 match the embedded release public key, and MUST fail the build otherwise.
+The image build SHALL install only packages that resolve from repository metadata verifying against the shipped archive key, and MUST fail the build otherwise.
 
-#### Scenario: Tampered artifact
+#### Scenario: Tampered repository metadata
 
-- **WHEN** the downloaded release artifact does not match the signed manifest
+- **WHEN** the repository `InRelease` or a package hash does not verify during the build
 - **THEN** the image build aborts and no image is produced
+
+#### Scenario: Pinned version unavailable
+
+- **WHEN** the requested package version is missing from the repository
+- **THEN** the build fails and names the missing version
+
+### Requirement: Update-ready image
+
+The image SHALL ship the archive keyring, the signed repository source, the origin pin, the update timer, and the boot-time package recovery unit, and the application MUST run with systemd readiness and watchdog enabled.
+
+#### Scenario: Update path present after first boot
+
+- **WHEN** the freshly booted device is inspected
+- **THEN** `apt-get update` verifies the repository, the update timer is enabled, and `weather-pi-update --check` runs successfully as a no-op
+
+#### Scenario: Origin pin
+
+- **WHEN** any package from the project repository is considered
+- **THEN** apt resolves it from the pinned `o=weather-pi` origin and not from a Debian origin
 
 ### Requirement: Publishable and auditable output
 
-The image build SHALL emit a compressed image, a SHA-256 checksum, a detached signature, and a build-info file recording the base distribution, package versions, and release version.
+The image build SHALL emit a compressed image, a SHA-256 checksum, a detached signature, and a `build-info` file recording the base distribution, repository date, package versions, and application version.
 
 #### Scenario: Consume an image
 
 - **WHEN** a maintainer downloads a published image
-- **THEN** the checksum and signature verify and the image's `/etc/weather-pi/build-info` names the source release and base distribution
+- **THEN** the checksum and signature verify and the image's `/etc/weather-pi/build-info` names the source release, base distribution, and installed package versions

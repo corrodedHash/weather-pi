@@ -2,15 +2,18 @@
 
 ## Why
 
-The binary is currently produced by an unpinned `build.sh` that assumes a nightly toolchain the repository never declares, so a fresh checkout fails to build on the default stable compiler. There is also no version stamp, no checksum, and no signature, which means the image and the auto-updater have no trustworthy artifact to install or verify.
+The binary is currently produced by an unpinned `build.sh` that assumes a nightly toolchain the repository never declares, so a fresh checkout fails to build on the default stable compiler. There is also no version stamp, no checksum, and no signature, which means the image and the device have no trustworthy artifact to install, verify, or roll back to.
 
 ## What Changes
 
 - Pin the required nightly Rust toolchain in the repository and drive builds through mise tasks.
 - Stamp the binary with a version derived from the git tag and expose it via `--version`.
-- Build release binaries for `arm-unknown-linux-gnueabihf` (Pi Zero, Zero W) and `aarch64-unknown-linux-gnu` (Zero 2 W).
-- Publish a signed release manifest containing each artifact's target, URL, SHA-256, size, and a monotonic sequence number.
-- Run checks, builds, and publication in GitHub Actions on `v*` tags.
+- Package the application as a Debian package (`weather-pi`) for `armhf` and `arm64`, plus a `weather-pi-updater` package that carries the image-resident update tooling.
+- Publish a signed apt repository (`InRelease`/`Packages`) so the disk image and the device install and verify the same artifact through one standard trust path.
+- Keep the previous published versions in the repository pool so an operator can downgrade deliberately.
+- Publish a `weather-pi-archive-keyring` package so the repository signing key can be rotated without reflashing.
+- Emit a `SHA256SUMS` file over the packages for archival and for the image build's independent check.
+- Run checks, package builds, and repository publication in GitHub Actions on `v*` tags, with Debian-version monotonicity enforced before publication.
 - Fix the shipped systemd unit and sample configs so an installed release actually starts (the unit passes no app argument today, and `greeter.toml` uses `watched_ip` where the struct expects `watched_ips`).
 - **BREAKING**: canonical install paths move from `/etc/skyscreen` and `/usr/share/skyscreen` to `/etc/weather-pi` and `/usr/share/weather-pi`; the old paths are read as a fallback for one release.
 
@@ -18,7 +21,7 @@ The binary is currently produced by an unpinned `build.sh` that assumes a nightl
 
 ### New Capabilities
 
-- `release-pipeline`: reproducible toolchain and builds, version reporting, signed release manifest, and the task/CI workflow that publishes them.
+- `release-pipeline`: reproducible toolchain and builds, version reporting, signed Debian packages, a signed apt repository with retained rollback versions, and the task/CI workflow that publishes them.
 
 ### Modified Capabilities
 
@@ -27,6 +30,7 @@ The binary is currently produced by an unpinned `build.sh` that assumes a nightl
 ## Impact
 
 - `Cargo.toml`, `src/main.rs`, `assets/weather-pi.service`, `assets/greeter.toml`, `build.sh`
-- New: `rust-toolchain.toml`, `mise.toml`, `.github/workflows/release.yml`, `docs/releasing.md`
-- Dev dependencies: `cross`, `minisign`, `jq` (all via mise)
+- New: `rust-toolchain.toml`, `mise.toml`, `packaging/weather-pi/`, `packaging/weather-pi-updater/`, `packaging/keyring/`, `scripts/apt-repo.sh`, `.github/workflows/release.yml`, `docs/releasing.md`
+- Dev dependencies: `cross`, `cargo-deb`, `dpkg-dev`, `apt-ftparchive`, `gnupg` (all via mise)
 - Adds a `--version` CLI flag; no other runtime behavior changes
+- GitHub Pages (or equivalent static hosting) serves the apt repository; the signing key is held in a protected CI environment
