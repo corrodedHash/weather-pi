@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Gives the operator a persistent, authenticated route to a headless device behind NAT so configuration can be deployed and a broken update can be recovered without physical access.
+Gives the operator a persistent, authenticated route to a headless device behind NAT so configuration can be deployed, package state inspected, and a broken update recovered without physical access.
 
 ## ADDED Requirements
 
@@ -68,23 +68,47 @@ The device's SSH service SHALL accept public-key authentication for the administ
 
 ### Requirement: Configuration deployment
 
-The project SHALL provide a command that copies configuration and assets to the device over the tunnel, restarts the application service, and reports the resulting service state.
+The project SHALL provide a command that copies configuration and assets to the device over the tunnel, restarts the application service, and reports the resulting service state, without modifying package-managed binaries.
 
 #### Scenario: Deploy configuration
 
 - **WHEN** the operator runs the deploy command with a reachable tunnel
-- **THEN** changed files are transferred, the service restarts, and the command reports success only if the service is active afterwards
+- **THEN** changed configuration files are transferred, the service restarts, and the command reports success only if the service is active afterwards
 
 #### Scenario: Unreachable device
 
 - **WHEN** the tunnel is down or the device is offline
 - **THEN** the deploy command fails with a clear error and changes no local state
 
+#### Scenario: No out-of-band binary replacement
+
+- **WHEN** the deploy command runs
+- **THEN** the installed package version reported by `dpkg-query` is unchanged
+
+### Requirement: Package state visibility
+
+The project SHALL provide a read-only status command that reports the tunnel, the application service, the installed and available package versions, the update timer, and the last update result, and MUST work while the application is stopped.
+
+#### Scenario: Status over the tunnel
+
+- **WHEN** the operator runs the status command with a reachable tunnel and a stopped application
+- **THEN** it prints the tunnel state, installed and candidate versions, timer state, and last update result without failing
+
+#### Scenario: Update available
+
+- **WHEN** a newer application package is published
+- **THEN** the status command shows it as the candidate without changing the installation
+
 ### Requirement: Recovery path
 
-The operator SHALL be able to reach the device over the tunnel and run the update rollback or restart the application manually.
+The operator SHALL be able to reach the device over the tunnel and roll back a bad package release or restart the application using the installed updater.
 
 #### Scenario: Broken update
 
 - **WHEN** the application is failing after an update and the tunnel is available
-- **THEN** the operator can connect over the VPS and invoke the rollback command successfully
+- **THEN** the operator can connect over the VPS, run the updater's rollback, and observe the service return to the last-good version
+
+#### Scenario: Updater upgrade
+
+- **WHEN** the operator deliberately upgrades the updater package over the tunnel
+- **THEN** only that package changes and the application keeps running
