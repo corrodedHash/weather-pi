@@ -65,7 +65,6 @@ fn dickbutt(v: &mut MyDisplay, dickbutt_path: &Path) {
     v.update_and_display_frame();
 }
 
-use config::Config;
 #[derive(Debug, Default, serde_derive::Deserialize, PartialEq, Eq)]
 struct CountdownConfig {
     dickbutt_path: String,
@@ -78,12 +77,10 @@ pub fn countdown() {
             target_time: "2025-04-14T19:00:00+02:00".to_owned(),
         }
     } else {
-        let config = Config::builder()
-            .add_source(config::File::with_name("/etc/skyscreen/countdown"))
-            .build()
-            .unwrap();
-
-        config.try_deserialize().unwrap()
+        crate::config::load("countdown")
+            .unwrap()
+            .try_deserialize()
+            .unwrap()
     };
     let target = chrono::DateTime::parse_from_rfc3339(&app.target_time).unwrap();
 
@@ -100,5 +97,26 @@ pub fn countdown() {
         }
 
         std::thread::sleep(Duration::from_secs(60));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CountdownConfig;
+
+    #[test]
+    fn sample_config_parses() {
+        let config = config::Config::builder()
+            .add_source(config::File::from_str(
+                include_str!("../../assets/countdown.toml"),
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize::<CountdownConfig>()
+            .unwrap();
+
+        assert!(!config.dickbutt_path.is_empty());
+        assert!(chrono::DateTime::parse_from_rfc3339(&config.target_time).is_ok());
     }
 }

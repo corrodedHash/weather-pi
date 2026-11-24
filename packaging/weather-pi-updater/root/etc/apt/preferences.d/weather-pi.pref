@@ -1,0 +1,4 @@
+Explanation: weather-pi releases come from the project archive
+Package: weather-pi weather-pi-updater weather-pi-archive-keyring
+Pin: release o=weather-pi
+Pin-Priority: 500

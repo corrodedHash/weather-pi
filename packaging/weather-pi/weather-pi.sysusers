@@ -1,0 +1,3 @@
+u weather-pi - "weather-pi e-ink display service" -
+m weather-pi spi
+m weather-pi gpio

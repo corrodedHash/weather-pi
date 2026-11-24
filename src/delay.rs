@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-
 pub struct UnixDelay;
 
 impl embedded_hal::delay::DelayNs for UnixDelay {
