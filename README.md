@@ -30,6 +30,8 @@ mise run build:arm64  # release binary for aarch64 (Pi Zero 2 W, arm64)
 mise run package      # build the Debian packages into dist/
 mise run repo         # regenerate and sign the apt repository
 mise run release      # validate a tag, build packages, generate the repository
+scripts/test-package.sh          # build and inspect a host package
+scripts/test-release-pipeline.sh # version, signing and retention checks
 ```
 
 `./build.sh` remains as a thin wrapper around `mise run build:armv6`.

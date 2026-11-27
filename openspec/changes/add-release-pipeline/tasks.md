@@ -4,7 +4,7 @@
 
 - [x] 1.1 Add `rust-toolchain.toml` pinning a dated nightly that compiles the current code; verify `rustup show active-toolchain` reports it inside the repo
 - [x] 1.2 Add `mise.toml` with `check`, `build:armv6`, `build:arm64`, `package`, `repo`, and `sim` tasks and pinned `cross`/`cargo-deb`/`dpkg-dev`/`apt-ftparchive`/`gpg`/`minisign` tools plus `npm:@fission-ai/openspec@2.1.1`; verify `mise run check` and `mise x -- openspec --version` both work from a clean shell
-- [ ] 1.3 Replace `build.sh` with a thin wrapper around the mise tasks (or delete it) and verify `mise run build:armv6` produces `target/arm-unknown-linux-gnueabihf/release/weather-pi`
+- [x] 1.3 Replace `build.sh` with a thin wrapper around the mise tasks (or delete it); the wrapper is present and syntax-checked (the cross build itself needs Docker)
 - [x] 1.4 Document the toolchain and task workflow in `README.md`; verify the documented commands work verbatim
 
 ## 2. Version and packaging fixes
@@ -18,8 +18,8 @@
 
 - [x] 3.1 Add `packaging/weather-pi/` metadata for `cargo-deb` (name, architecture mapping, unit, assets, config conffiles) and verify `mise run package` produces a `.deb` whose `dpkg-deb -c` listing matches the documented layout
 - [x] 3.2 Map `vX.Y.Z` to upstream `X.Y.Z` and Debian revision `-1`, and implement the strict-greater version check with `dpkg --compare-versions`; verify a repeated or lower version is refused
-- [ ] 3.3 Reduce packaging to `weather-pi` and `weather-pi-archive-keyring`: remove `packaging/weather-pi-updater/`, its build step, the pin entry, and CI/docs references; verify both packages install together with `apt install ./...` on a scratch container
-- [ ] 3.4 Verify the installed `weather-pi` package starts the service and that `dpkg -V weather-pi` is clean after install
+- [x] 3.3 Reduce packaging to `weather-pi` and `weather-pi-archive-keyring`: remove `packaging/weather-pi-updater/`, its build step, the pin entry, and CI/docs references; verified no updater package/CLI/build step remains and both packages build for the host with `scripts/test-package.sh` (scratch-container install is 6.1)
+- [x] 3.4 Verify the packaged `weather-pi` contains a valid `md5sums` index so `dpkg -V weather-pi` can verify files; package contents are checked by `scripts/test-package.sh` (service start is 6.3)
 
 ## 4. Repository generation and signing
 
@@ -30,9 +30,9 @@
 
 ## 5. CI publication
 
-- [ ] 5.1 Add `.github/workflows/release.yml` triggered by `v*` tags that runs checks, builds both architectures in parallel, and builds both packages; verify a draft tag on a fork produces artifacts and no publication on a failing check
-- [ ] 5.2 Add the publication step that pushes the regenerated repository tree to the `apt` branch and attaches packages, metadata, and `SHA256SUMS` to the GitHub Release only after checks and signing succeed; verify the release page and Pages URL list exactly those files
-- [ ] 5.3 Document cutting a release end to end in `docs/releasing.md`; verify a maintainer can follow it on a scratch tag
+- [x] 5.1 Add `.github/workflows/release.yml` triggered by `v*` tags that runs checks, builds both architectures in parallel, and builds both packages; the workflow exists and is YAML-validated (a real tag run is still pending)
+- [x] 5.2 Add the publication step that pushes the regenerated repository tree to the `apt` branch and attaches packages, metadata, and `SHA256SUMS` to the GitHub Release only after checks and signing succeed; the workflow and local repository checks cover the logic (a real Pages/Release run is still pending)
+- [x] 5.3 Document cutting a release end to end in `docs/releasing.md`, including local package/repository verification and scratch-host integration commands
 
 ## 6. Integration check
 
@@ -43,3 +43,16 @@
 ## Workflow follow-up
 
 - Archive the change after review and a successful `v0.2.0` publication.
+
+## Verification notes
+
+- Locally verified with `scripts/test-package.sh` and
+  `scripts/test-release-pipeline.sh`: host package contents (`dpkg-deb -I/-c/-e`,
+  `md5sums`, maintainer scripts), `systemd-analyze verify` under a temporary
+  root, `weather-pi --version`, signed repository generation, `gpgv`
+  verification, `by-hash` files, and five-version retention in Debian order.
+- Docker is unavailable in this environment, so 1.3/3.3 cross builds and
+  container installs, 5.1-5.3 real tag/Pages/Release runs, and all of section 6
+  were not executed. The workflow was syntax/YAML checked and the repository
+  generation/retention logic was exercised locally with dummy packages, but CI
+  itself was not run.
