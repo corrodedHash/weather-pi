@@ -1,3 +1,3 @@
-watched_ip = "192.168.178.28"
+watched_ips = ["192.168.178.28"]
 steps = 100
-heart_bmp_path = "/usr/share/skyscreen/heart.bmp"
+heart_bmp_path = "/usr/share/weather-pi/heart.bmp"

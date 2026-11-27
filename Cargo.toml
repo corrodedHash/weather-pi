@@ -29,3 +29,28 @@ u8g2-fonts = { version = "0.6.0", features = ["embedded_graphics_textstyle"] }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 embedded-graphics-simulator = "0.7.0"
+
+[package.metadata.deb]
+name = "weather-pi"
+maintainer = "corrodedHash <corrodedHash@users.noreply.github.com>"
+copyright = "2025, corrodedHash"
+section = "misc"
+priority = "optional"
+depends = "$auto"
+maintainer-scripts = "packaging/weather-pi/debian"
+assets = [
+    ["target/release/weather-pi", "usr/bin/weather-pi", "755"],
+    ["assets/greeter.toml", "etc/weather-pi/greeter.toml", "644"],
+    ["assets/countdown.toml", "etc/weather-pi/countdown.toml", "644"],
+    ["assets/heart.bmp", "usr/share/weather-pi/heart.bmp", "644"],
+    ["assets/heart_full.bmp", "usr/share/weather-pi/heart_full.bmp", "644"],
+    ["assets/dickbutt.bmp", "usr/share/weather-pi/dickbutt.bmp", "644"],
+    ["packaging/weather-pi/weather-pi.sysusers", "usr/lib/sysusers.d/weather-pi.conf", "644"],
+]
+
+[package.metadata.deb.systemd-units]
+unit-scripts = "assets"
+unit-name = "weather-pi"
+enable = true
+start = true
+restart-after-upgrade = true

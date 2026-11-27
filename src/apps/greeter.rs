@@ -153,7 +153,6 @@ fn watchdog(
     })
 }
 
-use config::Config;
 #[derive(Debug, Default, serde_derive::Deserialize, PartialEq, Eq)]
 struct GreeterConfig {
     watched_ips: Vec<Ipv4Addr>,
@@ -169,12 +168,10 @@ pub fn greeter() {
             steps: 10,
         }
     } else {
-        let config = Config::builder()
-            .add_source(config::File::with_name("/etc/skyscreen/greeter"))
-            .build()
-            .unwrap();
-
-        config.try_deserialize().unwrap()
+        crate::config::load("greeter")
+            .unwrap()
+            .try_deserialize()
+            .unwrap()
     };
     tracing::info!("{:#?}", &app);
     let heart_bpm_path = PathBuf::from(app.heart_bmp_path);
@@ -283,5 +280,27 @@ fn handle_event(connected_ips: &mut Vec<Ipv4Addr>, x: &NetworkEvent) -> bool {
             }
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GreeterConfig;
+
+    #[test]
+    fn sample_config_parses() {
+        let config = config::Config::builder()
+            .add_source(config::File::from_str(
+                include_str!("../../assets/greeter.toml"),
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize::<GreeterConfig>()
+            .unwrap();
+
+        assert_eq!(config.watched_ips.len(), 1);
+        assert!(config.steps > 0);
+        assert!(!config.heart_bmp_path.is_empty());
     }
 }

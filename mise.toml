@@ -1,0 +1,37 @@
+[tools]
+# Rust itself is pinned by rust-toolchain.toml, which rustup, cargo, editors and
+# mise all honour. Only auxiliary tools are declared here.
+"aqua:cross-rs/cross" = "0.2.5"
+"cargo:cargo-deb" = "3.8.0"
+"aqua:jedisct1/minisign" = "0.12"
+"aqua:koalaman/shellcheck" = "0.11.0"
+node = "24"
+"npm:@fission-ai/openspec" = "2.1.1"
+
+[tasks.check]
+description = "Format, lint and test the application"
+run = "cargo fmt --check && cargo clippy --all-targets && cargo test --all-targets"
+
+[tasks."build:armv6"]
+description = "Build the release binary for armv6/armv7 (Raspberry Pi Zero, armhf)"
+run = "cross build --target arm-unknown-linux-gnueabihf --release"
+
+[tasks."build:arm64"]
+description = "Build the release binary for aarch64 (Raspberry Pi Zero 2 W, arm64)"
+run = "cross build --target aarch64-unknown-linux-gnu --release"
+
+[tasks.package]
+description = "Build the weather-pi, weather-pi-updater and keyring Debian packages"
+run = "bash scripts/build-packages.sh"
+
+[tasks.repo]
+description = "Regenerate and sign the apt repository"
+run = "bash scripts/apt-repo.sh"
+
+[tasks.sim]
+description = "Run the application in the desktop simulator"
+run = "cargo run -- greeter"
+
+[tasks.release]
+description = "Cut a release from the current tag (see docs/releasing.md)"
+run = "bash scripts/release.sh"

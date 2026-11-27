@@ -1,0 +1,1 @@
+deb [signed-by=/usr/share/keyrings/weather-pi-archive.gpg] @REPO_URL@ trixie main

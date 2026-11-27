@@ -1,0 +1,186 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  WEATHER_PI_REPO_URL: https://corrodedhash.github.io/weather-pi/
+  WEATHER_PI_PUBLISHED_BASE: https://corrodedhash.github.io/weather-pi
+
+jobs:
+  check:
+    name: Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - name: Install pinned tools
+        run: mise install
+
+      - name: Show active toolchain
+        run: rustup show active-toolchain
+
+      - name: Format, lint and test
+        run: mise run check
+
+  package:
+    name: Package ${{ matrix.arch }}
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: armhf
+            target: arm-unknown-linux-gnueabihf
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - name: Install pinned tools and packaging dependencies
+        run: |
+          mise install
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dpkg-dev apt-utils gnupg
+
+      - name: Restore public archive keyring
+        env:
+          KEYRING_B64: ${{ secrets.WEATHER_PI_ARCHIVE_KEYRING_B64 }}
+        run: |
+          if [[ -n "$KEYRING_B64" ]]; then
+            mkdir -p packaging/keyring
+            printf '%s' "$KEYRING_B64" | base64 -d > packaging/keyring/weather-pi-archive.gpg
+          fi
+
+      - name: Build packages
+        run: |
+          version="$(scripts/version.sh from-tag "$GITHUB_REF_NAME")"
+          WEATHER_PI_VERSION="$version" scripts/build-packages.sh "${{ matrix.target }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.arch }}
+          path: dist/*.deb
+          if-no-files-found: error
+
+  publish:
+    name: Publish repository
+    needs: package
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install packaging and signing tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dpkg-dev apt-utils gnupg
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          path: dist
+          merge-multiple: true
+
+      - name: Compute release version
+        run: |
+          version="$(scripts/version.sh from-tag "$GITHUB_REF_NAME")"
+          echo "VERSION=$version" >>"$GITHUB_ENV"
+
+      - name: Refuse a version that is not strictly greater
+        run: |
+          : >published-Packages
+          for arch in armhf arm64; do
+            url="$WEATHER_PI_PUBLISHED_BASE/dists/trixie/main/binary-$arch/Packages"
+            if curl -fsSL "$url" -o "published-$arch"; then
+              cat "published-$arch" >>published-Packages
+            else
+              echo "No published index yet for $arch; treating as empty"
+            fi
+          done
+          if [[ -s published-Packages ]]; then
+            scripts/version.sh check "$VERSION" published-Packages
+          fi
+
+      - name: Import archive key
+        env:
+          ARCHIVE_KEY: ${{ secrets.WEATHER_PI_ARCHIVE_KEY }}
+        run: |
+          install -d -m 0700 "$RUNNER_TEMP/gnupg"
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          printf '%s' "$ARCHIVE_KEY" | gpg --batch --import
+
+      - name: Generate and sign the repository
+        env:
+          ARCHIVE_PASSPHRASE: ${{ secrets.WEATHER_PI_ARCHIVE_PASSPHRASE }}
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          export WEATHER_PI_ARCHIVE_KEY="$(
+            gpg --list-secret-keys --with-colons |
+              awk -F: '/^sec:/ { print $5; exit }'
+          )"
+          export WEATHER_PI_ARCHIVE_PASSPHRASE="$ARCHIVE_PASSPHRASE"
+          DIST_DIR=dist REPO_DIR=target/repo scripts/apt-repo.sh
+
+      - name: Checksums
+        run: |
+          (cd dist && sha256sum ./*.deb >SHA256SUMS)
+          sha256sum target/repo/dists/trixie/Release \
+            target/repo/dists/trixie/InRelease \
+            >>dist/SHA256SUMS
+
+      - name: Publish the apt branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          publish="$RUNNER_TEMP/apt"
+          mkdir -p "$publish"
+          cp -a target/repo/. "$publish/"
+          cd "$publish"
+          git init -q
+          git checkout -q -b apt
+          git config user.name "weather-pi release bot"
+          git config user.email "releases@users.noreply.github.com"
+          git add -A
+          git commit -q -m "apt: $GITHUB_REF_NAME ($VERSION)"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force origin apt
+
+      - name: Attach artifacts to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" \
+              --verify-tag \
+              --title "$GITHUB_REF_NAME" \
+              --notes "weather-pi $VERSION"
+
+          gh release upload "$GITHUB_REF_NAME" \
+            dist/*.deb \
+            dist/SHA256SUMS \
+            target/repo/dists/trixie/Release \
+            target/repo/dists/trixie/InRelease \
+            target/repo/dists/trixie/main/binary-armhf/Packages \
+            target/repo/dists/trixie/main/binary-arm64/Packages \
+            --clobber

@@ -1,0 +1,8 @@
+[toolchain]
+# The application uses an unstable feature (iter_intersperse), so a nightly
+# compiler is required. Pin the date rather than the rolling channel so that a
+# rebuild months later uses the same compiler. Updating the date is a deliberate
+# commit and must be validated with `mise run check`.
+channel = "nightly-2026-11-20"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

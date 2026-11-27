@@ -1,0 +1,10 @@
+Package: weather-pi-archive-keyring
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: corrodedHash <corrodedHash@users.noreply.github.com>
+Section: admin
+Priority: optional
+Description: GPG archive key for the weather-pi apt repository
+ Ships the public key used to verify the signed InRelease metadata of the
+ weather-pi package repository. Install a newer version of this package to
+ rotate the archive key without reflashing the device.
