@@ -26,6 +26,24 @@ need() {
     }
 }
 
+# Check prerequisites before the (slow) cross builds, not after them.
+need cargo
+need dpkg-deb
+need mise
+need rustc
+mise x -- cargo deb --version >/dev/null 2>&1 || {
+    echo "build-packages.sh: cargo-deb is not available through mise" >&2
+    exit 1
+}
+
+keyring="${WEATHER_PI_ARCHIVE_KEYRING:-packaging/keyring/weather-pi-archive.gpg}"
+if [[ ! -f "$keyring" ]]; then
+    echo "build-packages.sh: archive keyring not found at $keyring" >&2
+    echo "Export the public archive key with:" >&2
+    echo "  gpg --export --armor <key-id> | gpg --dearmor > $keyring" >&2
+    exit 1
+fi
+
 deb_arch() {
     case "$1" in
         arm-unknown-linux-gnueabihf | armv7-unknown-linux-gnueabihf) echo armhf ;;
@@ -33,6 +51,33 @@ deb_arch() {
         x86_64-unknown-linux-gnu) echo amd64 ;;
         *) echo "build-packages.sh: unsupported target '$1'" >&2; exit 1 ;;
     esac
+}
+
+# dpkg -V needs an md5sums index to verify installed files. Write it relative to
+# the package root so it works for both hand-staged and cargo-deb-built packages.
+write_md5sums() {
+    local root="$1"
+    (
+        cd "$root"
+        find . -path ./DEBIAN -prune -o -type f -printf '%P\0' |
+            sort -z |
+            xargs -0 -r md5sum >DEBIAN/md5sums
+    )
+}
+
+# cargo-deb does not emit md5sums. Rebuild its archive with the index added so
+# `dpkg -V weather-pi` checks the installed files.
+add_md5sums_to_deb() {
+    local deb="$1"
+    local work
+    work="$(mktemp -d)"
+
+    mkdir -p "$work/pkg"
+    dpkg-deb -R "$deb" "$work/pkg"
+    write_md5sums "$work/pkg"
+    dpkg-deb --build --root-owner-group "$work/pkg" "$work/rebuild.deb"
+    mv "$work/rebuild.deb" "$deb"
+    rm -rf "$work"
 }
 
 stage_deb() {
@@ -65,12 +110,7 @@ stage_deb() {
     fi
 
     # dpkg -V needs an md5sums index to verify installed files.
-    (
-        cd "$stage"
-        find . -path ./DEBIAN -prune -o -type f -printf '%P\0' |
-            sort -z |
-            xargs -0 -r md5sum >DEBIAN/md5sums
-    )
+    write_md5sums "$stage"
 
     dpkg-deb --build --root-owner-group "$stage" "$DIST_DIR/${name}_${VERSION}_${arch}.deb"
 }
@@ -91,17 +131,8 @@ for target in "${targets[@]}"; do
         --target "$target" \
         --deb-version "$VERSION" \
         --output "$DIST_DIR/weather-pi_${VERSION}_${arch}.deb"
+    add_md5sums_to_deb "$DIST_DIR/weather-pi_${VERSION}_${arch}.deb"
 done
-
-need dpkg-deb
-
-keyring="${WEATHER_PI_ARCHIVE_KEYRING:-packaging/keyring/weather-pi-archive.gpg}"
-if [[ ! -f "$keyring" ]]; then
-    echo "build-packages.sh: archive keyring not found at $keyring" >&2
-    echo "Export the public archive key with:" >&2
-    echo "  gpg --export --armor <key-id> | gpg --dearmor > $keyring" >&2
-    exit 1
-fi
 
 for target in "${targets[@]}"; do
     arch="$(deb_arch "$target")"
