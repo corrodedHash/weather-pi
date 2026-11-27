@@ -9,14 +9,14 @@
 ## 2. Payload installation
 
 - [ ] 2.1 Write the apt source, origin pin, and `90weather-pi` configuration into the stage and verify `apt-get update` inside the chroot verifies the signed repository
-- [ ] 2.2 Install `weather-pi` and `weather-pi-updater` at the pinned version inside the chroot; verify `dpkg-query -W` reports exactly that version and `dpkg -V` is clean
+- [ ] 2.2 Install `weather-pi` and `weather-pi-archive-keyring` at the pinned version inside the chroot; verify `dpkg-query -W` reports exactly that version and `dpkg -V` is clean
 - [ ] 2.3 Assert the build fails when the repository key is absent or a package is corrupted; verify with a deliberately broken local repository
-- [ ] 2.4 Enable `weather-pi-update.timer` and `weather-pi-recover.service`, confirm `APT::Keep-Downloaded-Packages` is effective, and verify the timer and recovery unit are enabled after boot
-- [ ] 2.5 Configure `unattended-upgrades` to exclude the `weather-pi` origin; verify the effective configuration omits it
+- [ ] 2.4 Install `unattended-upgrades`, enable periodic updates and unattended upgrades in `20auto-upgrades`, confirm `APT::Keep-Downloaded-Packages` is effective, and verify `apt-daily-upgrade.timer` is enabled after boot
+- [ ] 2.5 Add the `weather-pi` origin to the unattended-upgrades allowlist without replacing the distribution's origins; verify `unattended-upgrade --dry-run -d` lists both and that a newer project package is a candidate
 
 ## 3. Runtime and first-boot behaviour
 
-- [ ] 3.1 Install and enable the application unit with `weather-pi` user, `spi`/`gpio` groups, `Type=notify`, `WatchdogSec`, and no `chrt`; verify `systemd-analyze verify` and a real boot
+- [ ] 3.1 Install and enable the application unit with `weather-pi` user, `spi`/`gpio` groups, `Type=simple`, `Restart=on-failure`, and no `chrt`; verify `systemd-analyze verify` and a real boot
 - [ ] 3.2 Install config templates and assets through the package, enable SPI, and verify the service starts with the sample config on hardware
 - [ ] 3.3 Implement `weather-pi-firstboot.service` and its provisioning parser for hostname, WiFi, SSH keys, and tunnel target; verify each field is applied on a fresh card
 - [ ] 3.4 Make provisioning idempotent with a sentinel and preserve existing identities; verify a second boot changes nothing
@@ -27,7 +27,7 @@
 ## 4. Output and publication
 
 - [ ] 4.1 Emit `.img.zst`, `SHA256SUMS`, and a detached minisign signature; verify both from a clean download
-- [ ] 4.2 Add an on-device smoke test that checks service active state, watchdog health, network, display initialisation, and a no-op update check; verify it fails when the unit is reverted
+- [ ] 4.2 Add an on-device smoke test that checks service active state, network, display initialisation, and a no-change unattended-upgrades dry run; verify it fails when the unit is reverted
 
 ## 5. Hardware validation
 

@@ -9,7 +9,7 @@ See `proposal.md`. Constraints:
 - The device already runs systemd and OpenSSH is part of the base image.
 - The update flow can leave the service failing, so remote access must not depend on the application being healthy.
 - The image must stay secret-free; credentials are applied at first boot.
-- Application packages come from the signed repository (`add-release-pipeline`) and are installed by the device-side updater (`add-signed-updater`); the tunnel is for operator actions, not for shipping binaries.
+- Application packages come from the signed repository (`add-release-pipeline`) and are installed by the device's unattended-upgrades configuration (`add-unattended-upgrades`); the tunnel is for operator actions, not for shipping binaries.
 
 ## Goals / Non-Goals
 
@@ -73,27 +73,28 @@ The provisioning file carries the VPS host public key (or its fingerprint). Firs
 
 `PasswordAuthentication no`, `PermitRootLogin no`, `AllowUsers weather-pi`, and `authorized_keys` from provisioning. The tunnel account on the VPS is the only way in from outside; LAN access remains possible for initial setup and rescue.
 
-### Deploy configuration over the tunnel; deploy packages through apt
+### Deploy configuration over the tunnel; observe and recover packages through apt
 
-`mise run deploy` uses `rsync -e "ssh -J ..."` for `/etc/weather-pi/*.toml` and assets, then `systemctl restart weather-pi`, then checks `is-active` and the watchdog. It never writes `/usr/bin` or installs packages: the binary is owned by dpkg, and replacing it out of band would leave `dpkg` and `--status` lying about the installed version.
+`mise run deploy` uses `rsync -e "ssh -J ..."` for `/etc/weather-pi/*.toml` and assets, then `systemctl restart weather-pi`, then checks `is-active`. It never writes `/usr/bin` or installs packages: the binary is owned by dpkg, and replacing it out of band would leave `dpkg` and `status` lying about the installed version.
 
-Package-level operations are explicit and go through the device:
+Application updates are applied on the device by `unattended-upgrades`; the tunnel is used only to observe and intervene:
 
 ```
-ssh weather-pi 'sudo weather-pi-update --check'          # update now
-ssh weather-pi 'sudo weather-pi-update --rollback'       # undo a bad release
-ssh weather-pi 'sudo apt-get install --only-upgrade weather-pi-updater'
+ssh weather-pi 'apt-cache policy weather-pi'                                    # installed vs candidate
+ssh weather-pi 'sudo apt-get install --allow-downgrades weather-pi=<version>'   # pin an older release
+ssh weather-pi 'sudo dpkg --configure -a'                                       # finish an interrupted install
+ssh weather-pi 'sudo systemctl restart weather-pi'                              # restart without changing versions
 ```
 
-`mise run deploy-updater` wraps the last command over the tunnel. Ansible would add inventory, templating, and idempotence for a single host that already has two narrow commands; defer it.
+Ansible would add inventory, templating, and idempotence for a single host that already has standard apt commands; defer it.
 
 ### Status output
 
-`mise run status` collects, in one SSH invocation: tunnel unit state, application unit state and restart count, `dpkg-query -W weather-pi weather-pi-updater`, `apt-cache policy weather-pi`, `systemctl list-timers weather-pi-update.timer`, and `weather-pi-update --status`. It is read-only and must work when the application is stopped.
+`mise run status` collects, in one SSH invocation: tunnel unit state, application unit state and restart count, `dpkg-query -W weather-pi`, `apt-cache policy weather-pi`, `systemctl list-timers apt-daily-upgrade.timer`, and the tail of `/var/log/unattended-upgrades/unattended-upgrades.log`. It is read-only and must work when the application is stopped.
 
 ### Update traffic does not use the tunnel
 
-The device pulls packages from the HTTPS repository directly; the tunnel carries only operator SSH sessions. This keeps the tunnel load irrelevant to update speed, avoids VPS bandwidth, and means a tunnel outage does not block an update. The reverse also holds: an update failure cannot break the tunnel, because the tunnel unit is independent of the application and the updater.
+The device pulls packages from the HTTPS repository directly; the tunnel carries only operator SSH sessions. This keeps the tunnel load irrelevant to update speed, avoids VPS bandwidth, and means a tunnel outage does not block an update. The reverse also holds: an update failure cannot break the tunnel, because the tunnel unit is independent of the application and apt.
 
 ## Risks / Trade-offs
 
@@ -103,16 +104,16 @@ The device pulls packages from the HTTPS repository directly; the tunnel carries
 - **Host key pin blocks recovery after a VPS rebuild** → document the update procedure (edit the provisioning value and re-run first boot or update `/etc/ssh/known_hosts` over the console).
 - **SD card replacement loses the tunnel key** → re-enroll from the new public key; the image does not carry identity.
 - **SSH forwarding is slower than WireGuard** → acceptable for configuration and rescue; package downloads bypass it.
-- **Operator runs `deploy` while an update is in progress** → deploy only touches configuration and restarts; the updater's lock does not cover configuration writes, so document restarting after an update finishes.
+- **Operator runs `deploy` while an update is in progress** → deploy only touches configuration and restarts; wait for the daily apt run to finish when changing configuration, and document restarting afterwards.
 - **Manual `apt-get` on the device drifts from the image version** → `build-info` records the image baseline; `status` shows the installed version, which is the source of truth.
 
 ## Migration Plan
 
 1. Create the VPS account and firewall state with `scripts/vps-setup.sh`.
 2. Boot the device with the provisioning file containing the VPS host and pinned host key; enroll the generated tunnel public key.
-3. Confirm `ssh -J ... weather-pi@127.0.0.1 -p 2201` works, runs `weather-pi-update --status`, and shows the enabled timer.
+3. Confirm `ssh -J ... weather-pi@127.0.0.1 -p 2201` works, shows the installed version and apt candidate, and shows the enabled `apt-daily-upgrade.timer`.
 4. Deploy a harmless config change through `mise run deploy` and confirm the service restarts.
-5. Publish a newer package and update over the tunnel, then roll it back over the tunnel.
+5. Confirm a published package is installed by unattended-upgrades, then pin the previous version over the tunnel and confirm recovery.
 6. Keep LAN access documented as the fallback.
 
 ## Open Questions

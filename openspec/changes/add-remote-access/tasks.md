@@ -16,16 +16,16 @@
 
 ## 3. Operator workflow
 
-- [ ] 3.1 Add `mise run deploy` that rsyncs configuration and assets over ProxyJump, restarts the service, checks `is-active` and the watchdog, and verifies `dpkg-query` reports an unchanged package version; verify it fails cleanly when the tunnel is down
-- [ ] 3.2 Add `mise run status` that prints tunnel state, application state and restart count, installed and candidate package versions, timer state, and `weather-pi-update --status`; verify it works with the application stopped and with an update available
-- [ ] 3.3 Add `mise run deploy-updater` that upgrades only `weather-pi-updater` over the tunnel; verify the application version is unchanged afterwards
-- [ ] 3.4 Document the access command, `~/.ssh/config` snippet, configuration deploy, package update and rollback, and recovery procedure in `docs/remote-access.md`; verify the commands run as written and that package traffic bypasses the tunnel
+- [ ] 3.1 Add `mise run deploy` that rsyncs configuration and assets over ProxyJump, restarts the service, checks `is-active`, and verifies `dpkg-query` reports an unchanged package version; verify it fails cleanly when the tunnel is down
+- [ ] 3.2 Add `mise run status` that prints tunnel state, application state and restart count, installed and candidate package versions, `apt-daily-upgrade.timer` state, and the tail of the unattended-upgrades log; verify it works with the application stopped and with an update available
+- [ ] 3.3 Verify the documented pin/downgrade and `dpkg --configure -a` recovery commands over the tunnel, and confirm no updater CLI or `deploy-updater` task is required
+- [ ] 3.4 Document the access command, `~/.ssh/config` snippet, configuration deploy, update visibility, downgrade, and recovery procedure in `docs/remote-access.md`; verify the commands run as written and that package traffic bypasses the tunnel
 
 ## 4. Verification
 
 - [ ] 4.1 Reboot the device and confirm the tunnel re-establishes unattended; record time to usable port
 - [ ] 4.2 Simulate network loss and VPS restart; verify reconnection and that the display keeps running
-- [ ] 4.3 Break the application with a test package and recover using only the tunnel and `weather-pi-update --rollback`; record the steps and the resulting `status` output
+- [ ] 4.3 Break the application with a test package and recover using only the tunnel and an explicit version pin; record the steps and the resulting `status` output
 - [ ] 4.4 Confirm from a second machine that the VPS port is not reachable on the public interface; verify only ProxyJump access succeeds
 
 ## Workflow follow-up

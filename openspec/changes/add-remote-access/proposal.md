@@ -11,9 +11,9 @@ Once the device is on a wall behind NAT there is no way to reach it, change its 
 - Keep tunnel credentials per device: generate the tunnel key on the device (or accept a key supplied in the provisioning file) and require a one-time enrollment on the VPS.
 - Pin the VPS host key so the device does not connect to an impostor.
 - Harden both ends: dedicated VPS user, `restrict,port-forwarding,permitlisten=...` authorized key, key-only SSH on the device, no password or root login.
-- Add `mise run deploy` to push configuration and assets over the tunnel with rsync and restart the service, `mise run deploy-updater` to upgrade the updater package deliberately, and `mise run status` to inspect service, tunnel, and package state.
-- Keep binary deployment out of the deploy path: application packages come from the signed repository through the updater, not from the operator's machine.
-- Document VPS setup, enrollment, access commands, update and rollback over the tunnel, and the recovery procedure.
+- Add `mise run deploy` to push configuration and assets over the tunnel with rsync and restart the service, and `mise run status` to inspect service, tunnel, and package state.
+- Keep binary deployment out of the deploy path: application packages come from the signed repository through `unattended-upgrades`, not from the operator's machine.
+- Document VPS setup, enrollment, access commands, update visibility, downgrade, and the recovery procedure.
 
 ## Capabilities
 
@@ -27,7 +27,7 @@ Once the device is on a wall behind NAT there is no way to reach it, change its 
 
 ## Impact
 
-- New: `assets/weather-pi-tunnel.service`, `/etc/weather-pi/tunnel.toml` template, `scripts/vps-setup.sh`, `docs/remote-access.md`, mise `deploy`/`deploy-updater`/`status` tasks
+- New: `assets/weather-pi-tunnel.service`, `/etc/weather-pi/tunnel.toml` template, `scripts/vps-setup.sh`, `docs/remote-access.md`, mise `deploy`/`status` tasks
 - Image changes: install `openssh-client`, enable the tunnel unit, pass tunnel settings through first-boot provisioning
-- Recovery and status call `weather-pi-update` and `apt`/`dpkg` queries instead of a binary subcommand
+- Recovery and status use `apt-cache`, `dpkg-query`, `systemctl`, and the unattended-upgrades log; there is no updater CLI or `deploy-updater` task
 - Requires an existing VPS with SSH access; Ansible is deliberately not introduced for one device
