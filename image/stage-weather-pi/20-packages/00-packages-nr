@@ -1,0 +1,7 @@
+ca-certificates
+curl
+iputils-ping
+openssh-client
+openssh-server
+python3
+zstd
