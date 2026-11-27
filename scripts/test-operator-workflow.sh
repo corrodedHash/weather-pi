@@ -159,6 +159,10 @@ grep -Fq "systemctl restart weather-pi.service" "$state/actions" || fail "deploy
 grep -Fq "/etc/weather-pi/" "$state/rsync_calls" || fail "deploy did not target /etc/weather-pi/"
 grep -Fq "/usr/share/weather-pi/" "$state/rsync_calls" || fail "deploy did not target /usr/share/weather-pi/"
 grep -Fq "assets/greeter.toml" "$state/rsync_calls" || fail "deploy did not include the TOML assets"
+grep -Fq "assets/countdown.toml" "$state/rsync_calls" || fail "deploy did not include countdown.toml"
+if grep -Fq "assets/tunnel.toml" "$state/rsync_calls"; then
+    fail "deploy copied the tunnel provisioning template"
+fi
 grep -Fq "assets/heart.bmp" "$state/rsync_calls" || fail "deploy did not include the BMP assets"
 if grep -Fq "target/release/weather-pi" "$state/rsync_calls"; then fail "deploy tried to copy the application binary"; fi
 

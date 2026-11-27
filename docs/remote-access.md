@@ -164,13 +164,19 @@ key is verified and the provisioning value or
 The image contains no tunnel credentials. First boot writes the runtime files:
 
 - `/etc/weather-pi/tunnel.env` with `TUNNEL_HOST`, `TUNNEL_PORT`,
-  `TUNNEL_USER`, `TUNNEL_REMOTE_PORT`;
-- `/etc/weather-pi/tunnel_key` at mode 0600;
-- `/etc/weather-pi/known_hosts` with the pinned VPS host key.
+  `TUNNEL_USER`, `TUNNEL_REMOTE_PORT`, owned `root:weather-pi` at mode 0640
+  (or 0644) so the `weather-pi` account can read it;
+- `/etc/weather-pi/tunnel_key`, owned `weather-pi:weather-pi` at mode 0600.
+  If first boot writes it as root, it must chown it to `weather-pi`; OpenSSH
+  rejects a client private key with group or other access;
+- `/etc/weather-pi/known_hosts` with the pinned VPS host key, owned
+  `root:weather-pi` at mode 0640 (or `root:root` 0644) so `weather-pi` can read
+  it.
 
-The environment file is read by systemd as root, the private key must be
-readable and writable only by `weather-pi` (mode 0600), and `known_hosts` must
-be readable by `weather-pi` (for example 0644, or 0640 root:weather-pi).
+`weather-pi-tunnel.service` runs as `weather-pi`, so all three paths must be
+readable by that account. The environment file is also read by systemd as root.
+Use `chown weather-pi:weather-pi` and `chmod 0600` for the private key, and do
+not make the key group- or world-readable.
 
 ```bash
 # Expected ownership and modes on the device (bash)
@@ -250,8 +256,10 @@ mise run deploy
 
 1. checks that `weather-pi` is reachable over SSH and fails clearly if not;
 2. records the installed version with `dpkg-query`;
-3. rsyncs `assets/*.toml` to `/etc/weather-pi/` and `assets/*.bmp` to
-   `/usr/share/weather-pi/` using `sudo -n` on the device;
+3. copies the application configuration `assets/greeter.toml` and
+   `assets/countdown.toml` to `/etc/weather-pi/`, and `assets/*.bmp` to
+   `/usr/share/weather-pi/`, using `sudo -n` on the device;
+   `assets/tunnel.toml` is never copied by deploy;
 4. restarts `weather-pi.service` and verifies `is-active`;
 5. verifies that `dpkg-query` still reports the same version.
 
@@ -276,11 +284,12 @@ with-env { WEATHER_PI_DEPLOY_ASSETS: "0" } { mise run deploy }
 `mise run status` reads the same `WEATHER_PI_HOST` and `WEATHER_PI_SSH_OPTS`
 overrides.
 
-The deploy command treats the repository's `assets/*.toml` files as the source
-of truth for `/etc/weather-pi/`. Edit the repository files, not only the device,
-or the next deploy overwrites the remote copies. `tunnel.toml` is a provisioning
-template; the live tunnel uses the first-boot-generated `tunnel.env`,
-`tunnel_key` and `known_hosts`.
+The deploy command treats `assets/greeter.toml` and `assets/countdown.toml` as
+the source of truth for their files in `/etc/weather-pi/`. Edit the repository
+files, not only the device, or the next deploy overwrites the remote copies.
+`assets/tunnel.toml` is deliberately not deployed: it is a package/provisioning
+template, and first boot owns `/etc/weather-pi/tunnel.toml` and the runtime
+`tunnel.env`, `tunnel_key` and `known_hosts`.
 
 If deploy fails during preflight, it has not changed the device. If it fails
 after rsync, the configuration may already be copied; the error says so, and
@@ -419,8 +428,8 @@ Common causes:
   configured. First boot did not write the environment file or key; the tunnel
   is deliberately fail-closed.
 - `Permission denied (publickey)`: the public key is not enrolled for
-  `weatherpi-tunnel`, the key file is not mode 0600, or the account/options do
-  not match.
+  `weatherpi-tunnel`, the key file is not owned by `weather-pi` at mode 0600,
+  or the account/options do not match.
 - `REMOTE HOST IDENTIFICATION HAS CHANGED`: verify the new VPS host key out of
   band, then update provisioning/`known_hosts`. Do not delete the pinned entry
   without verifying it.

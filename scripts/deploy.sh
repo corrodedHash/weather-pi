@@ -41,14 +41,26 @@ for opt in "${rsh_opts[@]}"; do
 done
 rsync_cmd=(rsync -a '--chmod=D755,F644' --chown=root:root --rsync-path="sudo -n rsync" -e "$rsync_rsh")
 
+# Application configuration files that may be deployed over the tunnel. The
+# tunnel template is deliberately absent: first boot owns /etc/weather-pi/
+# tunnel.toml and the runtime tunnel.env, tunnel_key and known_hosts.
+app_config_files=(assets/greeter.toml assets/countdown.toml)
+
 toml_files=()
 bmp_files=()
 if [[ "$DEPLOY_ASSETS" == "1" ]]; then
+    for config in "${app_config_files[@]}"; do
+        [[ -f "$config" ]] || die "application configuration asset '$config' is missing"
+        toml_files+=("$config")
+    done
+    for file in "${toml_files[@]}"; do
+        [[ "$file" != "assets/tunnel.toml" ]] ||
+            die "refusing to deploy provisioning template '$file'; first boot owns it"
+    done
+
     shopt -s nullglob
-    toml_files=(assets/*.toml)
     bmp_files=(assets/*.bmp)
     shopt -u nullglob
-    [[ ${#toml_files[@]} -gt 0 ]] || die "no TOML assets found under assets/"
     [[ ${#bmp_files[@]} -gt 0 ]] || die "no BMP assets found under assets/"
 fi
 
@@ -64,7 +76,7 @@ before="${before//$'\n'/}"
 [[ -n "$before" ]] || die "the weather-pi package is not installed on '$HOST'; deploy does not install packages"
 
 if [[ "$DEPLOY_ASSETS" == "1" ]]; then
-    echo "==> Copying TOML configuration to $HOST:/etc/weather-pi/"
+    echo "==> Copying application configuration to $HOST:/etc/weather-pi/"
     "${rsync_cmd[@]}" "${toml_files[@]}" "$HOST:/etc/weather-pi/"
 
     echo "==> Copying BMP assets to $HOST:/usr/share/weather-pi/"
