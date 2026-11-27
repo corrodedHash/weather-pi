@@ -59,7 +59,7 @@ The image SHALL install the application and archive keyring packages in fixed do
 #### Scenario: Installed paths
 
 - **WHEN** the image is mounted
-- **THEN** the binary is at `/usr/bin/weather-pi`, assets under `/usr/share/weather-pi`, configuration under `/etc/weather-pi`, the archive key at `/usr/share/keyrings/weather-pi-archive.gpg`, and the unit at `/etc/systemd/system/weather-pi.service`
+- **THEN** the binary is at `/usr/bin/weather-pi`, assets under `/usr/share/weather-pi`, configuration under `/etc/weather-pi`, the archive key at `/usr/share/keyrings/weather-pi-archive.gpg`, and the unit at `/usr/lib/systemd/system/weather-pi.service`
 
 #### Scenario: Sample config is valid
 

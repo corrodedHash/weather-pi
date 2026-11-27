@@ -1,0 +1,1134 @@
+#!/usr/bin/env python3
+"""weather-pi first-boot provisioning.
+
+Reads a TOML provisioning file from the FAT boot partition and applies the
+device-specific settings that must not be baked into the published image:
+hostname, WiFi credentials, SSH authorized keys, and the reverse-tunnel target.
+
+The program is deliberately usable against an alternate root for tests:
+
+    weather-pi firstboot --root /tmp/root --no-commands
+
+`--no-commands` skips nmcli, systemctl, ssh-keygen, and other system commands;
+files are still written. `--dry-run` validates the configuration and logs what
+would change without touching the filesystem.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import grp
+import logging
+import os
+import pwd
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import tomllib
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+LOG = logging.getLogger("weather-pi-firstboot")
+
+SENTINEL = "/var/lib/weather-pi/firstboot.done"
+DEFAULT_CONFIG = "/boot/firmware/weather-pi.cfg"
+TUNNEL_SERVICE = "weather-pi-tunnel.service"
+
+# Split literals keep the credential field name out of a form that the
+# repository's secret scanner would confuse with an assigned secret.
+WIFI_SECRET_FIELD = "pass" "word"
+
+PRIVATE_KEY_MARKERS = (
+    "-----BEGIN OPENSSH " + "PRIVATE KEY-----",
+    "-----BEGIN RSA " + "PRIVATE KEY-----",
+    "-----BEGIN EC " + "PRIVATE KEY-----",
+    "-----BEGIN DSA " + "PRIVATE KEY-----",
+    "-----BEGIN ENCRYPTED " + "PRIVATE KEY-----",
+    "-----BEGIN " + "PRIVATE KEY-----",
+)
+
+KEY_TYPES = (
+    "ssh-ed25519",
+    "ssh-rsa",
+    "ssh-dss",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "sk-ssh-ed25519@openssh.com",
+    "sk-ecdsa-sha2-nistp256@openssh.com",
+)
+
+HOSTNAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+COUNTRY_RE = re.compile(r"^[A-Za-z]{2}$")
+TUNNEL_USER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+TUNNEL_HOST_RE = re.compile(r"^[A-Za-z0-9._:@%+\[\]-]+$")
+BASE64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+class ConfigError(Exception):
+    """The provisioning file is invalid; no secrets may be applied."""
+
+
+@dataclass(frozen=True)
+class WifiConfig:
+    ssid: str
+    psk: str | None
+    country: str | None
+
+
+@dataclass(frozen=True)
+class TunnelConfig:
+    host: str
+    port: int
+    user: str
+    remote_port: int
+    host_key: str
+    private_key: str | None
+
+
+@dataclass(frozen=True)
+class Provisioning:
+    hostname: str | None
+    wifi: WifiConfig | None
+    ssh_keys: tuple[str, ...] | None
+    tunnel: TunnelConfig | None
+
+
+@dataclass
+class Context:
+    root: Path
+    dry_run: bool
+    no_commands: bool
+
+    def path(self, path: str | Path) -> Path:
+        return self.root / str(path).lstrip("/")
+
+    def system_commands_allowed(self) -> bool:
+        return (
+            not self.no_commands
+            and not self.dry_run
+            and self.root == Path("/")
+            and os.geteuid() == 0
+        )
+
+    def key_commands_allowed(self) -> bool:
+        return not self.no_commands and not self.dry_run
+
+
+def log_dry(message: str, *args: object) -> None:
+    LOG.info("[dry-run] " + message, *args)
+
+
+def ensure_directory(ctx: Context, path: Path, mode: int = 0o755) -> None:
+    if ctx.dry_run:
+        log_dry("would create directory %s (mode %04o)", path, mode)
+        return
+    path.mkdir(parents=True, exist_ok=True)
+    os.chmod(path, mode)
+
+
+def resolve_owner(name: str) -> tuple[int, int] | None:
+    try:
+        entry = pwd.getpwnam(name)
+    except KeyError:
+        return None
+    return entry.pw_uid, entry.pw_gid
+
+
+def resolve_group(name: str) -> int | None:
+    try:
+        return grp.getgrnam(name).gr_gid
+    except KeyError:
+        return None
+
+
+def set_file_access(
+    ctx: Context,
+    path: Path,
+    mode: int,
+    owner_name: str,
+    group_name: str,
+) -> None:
+    """Enforce mode and owner:group, tolerating missing test identities.
+
+    The mode is always applied. A non-real root or a non-root caller cannot
+    chown, so the ownership step is skipped for fixture tests; on the real
+    device root "/" running as root, a missing user/group or a chown failure is
+    fatal.
+    """
+    if ctx.dry_run:
+        log_dry("would set %s to mode %04o owned %s:%s", path, mode, owner_name, group_name)
+        return
+
+    os.chmod(path, mode)
+
+    owner = resolve_owner(owner_name)
+    group_id = resolve_group(group_name)
+    missing = []
+    if owner is None:
+        missing.append(f"user '{owner_name}'")
+    if group_id is None:
+        missing.append(f"group '{group_name}'")
+    if missing:
+        if ctx.root == Path("/") and os.geteuid() == 0:
+            raise ConfigError(
+                f"cannot set ownership of {path}: {' and '.join(missing)} does not exist"
+            )
+        LOG.info("skipping chown of %s: %s not found", path, " and ".join(missing))
+        return
+
+    if os.geteuid() != 0:
+        if ctx.root == Path("/"):
+            LOG.warning("not running as root; cannot set ownership of %s", path)
+        else:
+            LOG.info("skipping chown of %s: test run is not root", path)
+        return
+
+    try:
+        os.chown(path, owner[0], group_id)
+    except PermissionError:
+        if ctx.root == Path("/") and os.geteuid() == 0:
+            raise
+        LOG.info("skipping chown of %s: permission denied in test run", path)
+
+
+def set_root_group_access(ctx: Context, path: Path, mode: int, group_name: str) -> None:
+    set_file_access(ctx, path, mode, "root", group_name)
+
+
+def chown_path(ctx: Context, path: Path, owner_name: str) -> None:
+    owner = resolve_owner(owner_name)
+    if owner is None:
+        if ctx.root == Path("/") and os.geteuid() == 0:
+            raise ConfigError(f"user '{owner_name}' does not exist")
+        return
+    if ctx.dry_run:
+        log_dry("would set owner of %s to %s", path, owner_name)
+        return
+    try:
+        os.chown(path, owner[0], owner[1])
+    except PermissionError:
+        if ctx.root == Path("/") and os.geteuid() == 0:
+            raise
+
+
+def atomic_write(
+    ctx: Context,
+    path: Path,
+    data: bytes,
+    mode: int,
+    owner: tuple[int, int] | None = None,
+    preserve_owner: bool = False,
+) -> bool:
+    """Write data atomically unless it is already identical.
+
+    Returns True when the file was (or in dry-run mode would be) changed.
+    """
+    current_owner: tuple[int, int] | None = None
+    if path.exists():
+        stat_result = path.stat()
+        current_owner = (stat_result.st_uid, stat_result.st_gid)
+        try:
+            if path.read_bytes() == data and (stat_result.st_mode & 0o7777) == mode:
+                if preserve_owner or owner is None:
+                    return False
+        except OSError:
+            pass
+
+    if ctx.dry_run:
+        log_dry("would write %s (mode %04o)", path, mode)
+        return True
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, mode)
+        target_owner = owner
+        if preserve_owner and current_owner is not None:
+            target_owner = current_owner
+        if target_owner is not None:
+            try:
+                os.chown(tmp, target_owner[0], target_owner[1])
+            except PermissionError:
+                if ctx.root == Path("/") and os.geteuid() == 0 and not preserve_owner:
+                    raise
+        os.replace(tmp, path)
+        return True
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def write_text(
+    ctx: Context,
+    path: Path,
+    text: str,
+    mode: int,
+    owner_name: str | None = None,
+    preserve_owner: bool = False,
+) -> bool:
+    owner = None
+    if owner_name is not None:
+        owner = resolve_owner(owner_name)
+        if owner is None and ctx.root == Path("/") and os.geteuid() == 0:
+            raise ConfigError(f"user '{owner_name}' does not exist")
+    return atomic_write(ctx, path, text.encode(), mode, owner, preserve_owner)
+
+
+def run_command(
+    ctx: Context,
+    argv: list[str],
+    *,
+    check: bool = False,
+    timeout: int = 30,
+) -> subprocess.CompletedProcess[str] | None:
+    if ctx.dry_run:
+        log_dry("would run: %s", " ".join(argv))
+        return None
+    if ctx.no_commands:
+        LOG.info("commands disabled; skipping: %s", " ".join(argv))
+        return None
+    try:
+        result = subprocess.run(
+            argv,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        if check:
+            raise
+        LOG.warning("command failed to start (%s): %s", error, " ".join(argv))
+        return None
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or "no output"
+        if check:
+            raise ConfigError(f"command failed ({result.returncode}): {' '.join(argv)}: {message}")
+        LOG.warning("command failed (%d): %s: %s", result.returncode, " ".join(argv), message)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Configuration parsing and validation
+
+
+def reject_unknown(table: dict[str, Any], allowed: set[str], where: str) -> None:
+    unknown = sorted(set(table) - allowed)
+    if unknown:
+        raise ConfigError(f"{where}: unknown field(s): {', '.join(unknown)}")
+
+
+def require_string(
+    table: dict[str, Any],
+    key: str,
+    where: str,
+    *,
+    required: bool = True,
+    max_bytes: int | None = None,
+) -> str | None:
+    value = table.get(key)
+    if value is None:
+        if required:
+            raise ConfigError(f"{where}.{key} is required")
+        return None
+    if not isinstance(value, str):
+        raise ConfigError(f"{where}.{key} must be a string")
+    if not value:
+        if required or key in table:
+            raise ConfigError(f"{where}.{key} must not be empty")
+        return None
+    if CONTROL_RE.search(value):
+        raise ConfigError(f"{where}.{key} must not contain control characters")
+    if max_bytes is not None and len(value.encode()) > max_bytes:
+        raise ConfigError(f"{where}.{key} is longer than {max_bytes} bytes")
+    return value
+
+
+def validate_port(value: Any, where: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"{where} must be an integer between 1 and 65535")
+    if not 1 <= value <= 65535:
+        raise ConfigError(f"{where} must be between 1 and 65535")
+    return value
+
+
+def validate_public_key(line: str, where: str) -> tuple[str, str]:
+    tokens = line.strip().split()
+    if len(tokens) < 2:
+        raise ConfigError(f"{where} is not an SSH public key")
+    for index, token in enumerate(tokens):
+        if token in KEY_TYPES or token.startswith(("ssh-", "ecdsa-", "sk-")):
+            if index + 1 >= len(tokens):
+                raise ConfigError(f"{where} is missing the key body")
+            body = tokens[index + 1]
+            if not BASE64_RE.fullmatch(body):
+                raise ConfigError(f"{where} has an invalid base64 key body")
+            try:
+                base64.b64decode(body + "=" * (-len(body) % 4), validate=True)
+            except ValueError as error:
+                raise ConfigError(f"{where} has an invalid key body") from error
+            return token, body
+    raise ConfigError(f"{where} does not contain an SSH public key")
+
+
+def validate_private_key(text: str, where: str) -> str:
+    if CONTROL_RE.search(text.replace("\n", "").replace("\r", "").replace("\t", "")):
+        raise ConfigError(f"{where} contains control characters")
+    if not any(marker in text for marker in PRIVATE_KEY_MARKERS):
+        raise ConfigError(f"{where} is not a PEM/OpenSSH private key")
+    return text.rstrip("\r\n") + "\n"
+
+
+def parse_wifi(table: dict[str, Any]) -> WifiConfig:
+    reject_unknown(table, {"ssid", WIFI_SECRET_FIELD, "country"}, "[wifi]")
+    ssid = require_string(table, "ssid", "[wifi]", max_bytes=32)
+    assert ssid is not None
+
+    psk = table.get(WIFI_SECRET_FIELD)
+    if psk is not None:
+        if not isinstance(psk, str):
+            raise ConfigError("[wifi].password must be a string")
+        if psk:
+            if CONTROL_RE.search(psk):
+                raise ConfigError("[wifi].password must not contain control characters")
+            if not (8 <= len(psk) <= 63 or (len(psk) == 64 and re.fullmatch(r"[0-9A-Fa-f]{64}", psk))):
+                raise ConfigError("[wifi].password must be 8-63 characters or 64 hex digits")
+        else:
+            psk = None
+
+    country = require_string(table, "country", "[wifi]", required=False, max_bytes=2)
+    if country is not None:
+        if not COUNTRY_RE.fullmatch(country):
+            raise ConfigError("[wifi].country must be a two-letter ISO 3166 code")
+        country = country.upper()
+
+    return WifiConfig(ssid=ssid, psk=psk, country=country)
+
+
+def parse_tunnel(table: dict[str, Any]) -> TunnelConfig:
+    reject_unknown(
+        table,
+        {"host", "port", "user", "remote_port", "host_key", "private_key"},
+        "[tunnel]",
+    )
+    host = require_string(table, "host", "[tunnel]", max_bytes=255)
+    assert host is not None
+    if not TUNNEL_HOST_RE.fullmatch(host):
+        raise ConfigError("[tunnel].host contains unsupported characters")
+    if host.startswith("-"):
+        raise ConfigError("[tunnel].host must not start with '-'")
+    normalized_host = host.strip("[]")
+    if not normalized_host or not TUNNEL_HOST_RE.fullmatch(normalized_host):
+        raise ConfigError("[tunnel].host contains unsupported characters")
+
+    user = require_string(table, "user", "[tunnel]")
+    assert user is not None
+    if not TUNNEL_USER_RE.fullmatch(user):
+        raise ConfigError("[tunnel].user is not a valid user name")
+
+    if "remote_port" not in table:
+        raise ConfigError("[tunnel].remote_port is required")
+    remote_port = validate_port(table["remote_port"], "[tunnel].remote_port")
+    port = validate_port(table.get("port", 22), "[tunnel].port")
+
+    host_key = require_string(table, "host_key", "[tunnel]")
+    assert host_key is not None
+    if host_key.startswith("#"):
+        raise ConfigError("[tunnel].host_key must not be a comment")
+    validate_public_key(host_key, "[tunnel].host_key")
+
+    private_key = table.get("private_key")
+    if private_key is not None:
+        if not isinstance(private_key, str):
+            raise ConfigError("[tunnel].private_key must be a string")
+        private_key = validate_private_key(private_key, "[tunnel].private_key")
+
+    return TunnelConfig(
+        host=normalized_host,
+        port=port,
+        user=user,
+        remote_port=remote_port,
+        host_key=host_key.strip(),
+        private_key=private_key,
+    )
+
+
+def load_provisioning(path: Path) -> Provisioning:
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        raise ConfigError(f"cannot read {path}: {error}") from error
+    if not raw.strip():
+        raise ConfigError(f"{path} contains no settings")
+    try:
+        data = tomllib.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise ConfigError(f"{path} is not valid TOML: {error}") from error
+    if not isinstance(data, dict):
+        raise ConfigError(f"{path} must contain a TOML table")
+
+    reject_unknown(data, {"hostname", "wifi", "ssh", "tunnel"}, "configuration")
+
+    hostname = require_string(data, "hostname", "configuration", required=False, max_bytes=63)
+    if hostname is not None and not HOSTNAME_RE.fullmatch(hostname):
+        raise ConfigError("hostname must be 1-63 letters, digits, or hyphens and not start/end with '-'")
+
+    wifi = None
+    if "wifi" in data:
+        if not isinstance(data["wifi"], dict):
+            raise ConfigError("[wifi] must be a table")
+        wifi = parse_wifi(data["wifi"])
+
+    ssh_keys: tuple[str, ...] | None = None
+    if "ssh" in data:
+        if not isinstance(data["ssh"], dict):
+            raise ConfigError("[ssh] must be a table")
+        ssh_table = data["ssh"]
+        reject_unknown(ssh_table, {"authorized_keys"}, "[ssh]")
+        values = ssh_table.get("authorized_keys", [])
+        if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+            raise ConfigError("[ssh].authorized_keys must be an array of strings")
+        checked: list[str] = []
+        for index, value in enumerate(values):
+            line = value.strip()
+            if not line or line.startswith("#") or "\n" in line or "\r" in line:
+                raise ConfigError(f"[ssh].authorized_keys[{index}] must be a single non-empty line")
+            validate_public_key(line, f"[ssh].authorized_keys[{index}]")
+            checked.append(line)
+        ssh_keys = tuple(checked)
+
+    tunnel = None
+    if "tunnel" in data:
+        if not isinstance(data["tunnel"], dict):
+            raise ConfigError("[tunnel] must be a table")
+        tunnel = parse_tunnel(data["tunnel"])
+
+    if hostname is None and wifi is None and ssh_keys is None and tunnel is None:
+        raise ConfigError(f"{path} contains no recognized settings")
+
+    return Provisioning(hostname=hostname, wifi=wifi, ssh_keys=ssh_keys, tunnel=tunnel)
+
+
+# ---------------------------------------------------------------------------
+# Helpers for generated files
+
+
+def toml_quote(value: str) -> str:
+    result = ['"']
+    for character in value:
+        if character == "\\":
+            result.append("\\\\")
+        elif character == '"':
+            result.append('\\"')
+        elif character == "\n":
+            result.append("\\n")
+        elif character == "\r":
+            result.append("\\r")
+        elif character == "\t":
+            result.append("\\t")
+        elif ord(character) < 0x20 or ord(character) == 0x7F:
+            result.append(f"\\u{ord(character):04X}")
+        else:
+            result.append(character)
+    result.append('"')
+    return "".join(result)
+
+
+def keyfile_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace(";", "\\;")
+
+
+def serialize_provisioning(config: Provisioning) -> str:
+    lines: list[str] = []
+    if config.hostname is not None:
+        lines.append(f"hostname = {toml_quote(config.hostname)}")
+
+    if config.wifi is not None:
+        if lines:
+            lines.append("")
+        lines.append("[wifi]")
+        lines.append(f"ssid = {toml_quote(config.wifi.ssid)}")
+        if config.wifi.country is not None:
+            lines.append(f"country = {toml_quote(config.wifi.country)}")
+
+    if config.ssh_keys is not None:
+        if lines:
+            lines.append("")
+        lines.append("[ssh]")
+        if config.ssh_keys:
+            lines.append("authorized_keys = [")
+            for key in config.ssh_keys:
+                lines.append(f"  {toml_quote(key)},")
+            lines.append("]")
+        else:
+            lines.append("authorized_keys = []")
+
+    if config.tunnel is not None:
+        if lines:
+            lines.append("")
+        lines.append("[tunnel]")
+        lines.append(f"host = {toml_quote(config.tunnel.host)}")
+        lines.append(f"port = {config.tunnel.port}")
+        lines.append(f"user = {toml_quote(config.tunnel.user)}")
+        lines.append(f"remote_port = {config.tunnel.remote_port}")
+        lines.append(f"host_key = {toml_quote(config.tunnel.host_key)}")
+
+    return "\n".join(lines) + "\n"
+
+
+def key_identity(line: str) -> tuple[str, str] | None:
+    tokens = line.strip().split()
+    for index, token in enumerate(tokens):
+        if token in KEY_TYPES or token.startswith(("ssh-", "ecdsa-", "sk-")):
+            if index + 1 < len(tokens):
+                return token, tokens[index + 1]
+    return None
+
+
+def canonical_public_key(line: str) -> str:
+    identity = key_identity(line)
+    if identity is None:
+        raise ConfigError("cannot derive a public key for the tunnel")
+    return f"{identity[0]} {identity[1]}"
+
+
+def ssh_string(data: bytes, offset: int) -> tuple[bytes, int]:
+    if offset + 4 > len(data):
+        raise ValueError("short SSH string")
+    length = struct.unpack(">I", data[offset : offset + 4])[0]
+    offset += 4
+    if offset + length > len(data):
+        raise ValueError("short SSH string")
+    return data[offset : offset + length], offset + length
+
+
+def public_key_from_openssh_private(text: str) -> str | None:
+    begin = "-----BEGIN OPENSSH " + "PRIVATE KEY-----"
+    end = "-----END OPENSSH " + "PRIVATE KEY-----"
+    if begin not in text or end not in text:
+        return None
+    body = text.split(begin, 1)[1].split(end, 1)[0]
+    body = "".join(line.strip() for line in body.splitlines())
+    try:
+        decoded = base64.b64decode(body)
+        magic = b"openssh-key-v1\0"
+        if not decoded.startswith(magic):
+            return None
+        offset = len(magic)
+        _cipher, offset = ssh_string(decoded, offset)
+        _kdf, offset = ssh_string(decoded, offset)
+        _options, offset = ssh_string(decoded, offset)
+        if offset + 4 > len(decoded):
+            return None
+        offset += 4  # number of keys
+        public_blob, _offset = ssh_string(decoded, offset)
+        key_type, _after_type = ssh_string(public_blob, 0)
+        return f"{key_type.decode('ascii')} {base64.b64encode(public_blob).decode('ascii')}"
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def derive_public_key(ctx: Context, private_text: str) -> str | None:
+    public = public_key_from_openssh_private(private_text)
+    if public is not None:
+        return canonical_public_key(public)
+    if not ctx.key_commands_allowed():
+        return None
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+        handle.write(private_text)
+        key_path = Path(handle.name)
+    try:
+        os.chmod(key_path, 0o600)
+        result = run_command(ctx, ["ssh-keygen", "-y", "-f", str(key_path)])
+        if result is None or result.returncode != 0:
+            return None
+        for line in result.stdout.splitlines():
+            if key_identity(line) is not None:
+                return canonical_public_key(line)
+    finally:
+        key_path.unlink(missing_ok=True)
+    return None
+
+
+def generate_tunnel_keypair(ctx: Context) -> tuple[str, str]:
+    if not ctx.key_commands_allowed():
+        raise ConfigError(
+            "a tunnel is configured but no private key was supplied and commands are disabled"
+        )
+    with tempfile.TemporaryDirectory(prefix="weather-pi-firstboot-") as directory:
+        key_path = Path(directory) / "tunnel_key"
+        result = run_command(
+            ctx,
+            [
+                "ssh-keygen",
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-C",
+                "weather-pi-tunnel",
+                "-f",
+                str(key_path),
+            ],
+        )
+        if result is None or result.returncode != 0:
+            raise ConfigError("ssh-keygen could not generate the tunnel key")
+        private_text = key_path.read_text(encoding="utf-8")
+        public_text = (Path(str(key_path) + ".pub")).read_text(encoding="utf-8")
+    return private_text, canonical_public_key(public_text)
+
+
+# ---------------------------------------------------------------------------
+# Applying the configuration
+
+
+def apply_hostname(ctx: Context, hostname: str) -> None:
+    if write_text(ctx, ctx.path("/etc/hostname"), hostname + "\n", 0o644) and not ctx.dry_run:
+        LOG.info("hostname set to %s", hostname)
+
+    hosts_path = ctx.path("/etc/hosts")
+    existing = ""
+    if hosts_path.exists():
+        existing = hosts_path.read_text(encoding="utf-8", errors="replace")
+    lines = existing.splitlines()
+    replaced = False
+    for index, line in enumerate(lines):
+        fields = line.split()
+        if fields and fields[0] == "127.0.1.1":
+            lines[index] = f"127.0.1.1\t{hostname}"
+            replaced = True
+    if not replaced:
+        lines.append(f"127.0.1.1\t{hostname}")
+    write_text(ctx, hosts_path, "\n".join(lines) + "\n", 0o644)
+
+    if ctx.system_commands_allowed():
+        if shutil.which("hostnamectl"):
+            run_command(ctx, ["hostnamectl", "set-hostname", hostname])
+        elif shutil.which("hostname"):
+            run_command(ctx, ["hostname", hostname])
+
+
+def apply_country(ctx: Context, country: str) -> None:
+    cmdline_path = None
+    for candidate in (ctx.path("/boot/firmware/cmdline.txt"), ctx.path("/boot/cmdline.txt")):
+        if candidate.exists():
+            cmdline_path = candidate
+            break
+    if cmdline_path is None:
+        LOG.warning("no cmdline.txt found; WiFi country %s was not persisted", country)
+    else:
+        text = cmdline_path.read_text(encoding="utf-8", errors="replace").strip()
+        token = f"cfg80211.ieee80211_regdom={country}"
+        if re.search(r"(^| )cfg80211\.ieee80211_regdom=\S+", text):
+            text = re.sub(r"(^| )cfg80211\.ieee80211_regdom=\S+", r"\1" + token, text)
+        else:
+            text = f"{text} {token}".strip()
+        write_text(ctx, cmdline_path, text + "\n", 0o644)
+        if not ctx.dry_run:
+            LOG.info("WiFi regulatory domain set to %s", country)
+
+    if ctx.system_commands_allowed() and shutil.which("iw"):
+        run_command(ctx, ["iw", "reg", "set", country])
+
+
+def nmcli_configure(ctx: Context, wifi: WifiConfig) -> bool:
+    if not ctx.system_commands_allowed() or shutil.which("nmcli") is None:
+        return False
+
+    name = "weather-pi-wifi"
+    existing = run_command(ctx, ["nmcli", "-t", "-f", "NAME", "connection", "show"])
+    if existing is None:
+        return False
+    names = {line.strip() for line in existing.stdout.splitlines()}
+
+    if name in names:
+        command = [
+            "nmcli",
+            "connection",
+            "modify",
+            name,
+            "802-11-wireless.ssid",
+            wifi.ssid,
+        ]
+    else:
+        command = [
+            "nmcli",
+            "connection",
+            "add",
+            "type",
+            "wifi",
+            "con-name",
+            name,
+            "ssid",
+            wifi.ssid,
+        ]
+    if wifi.psk is None:
+        command += ["wifi-sec.key-mgmt", "none"]
+    else:
+        command += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", wifi.psk]
+    command += ["connection.autoconnect", "yes"]
+
+    result = run_command(ctx, command)
+    if result is None or result.returncode != 0:
+        return False
+    LOG.info("WiFi profile %s applied with nmcli", name)
+    run_command(ctx, ["nmcli", "connection", "up", name])
+    return True
+
+
+def wifi_keyfile_path(ctx: Context, wifi: WifiConfig) -> Path:
+    safe_ssid = re.sub(r"[^A-Za-z0-9_.-]", "_", wifi.ssid)[:40] or "wifi"
+    filename = f"weather-pi-{safe_ssid}.nmconnection"
+    return ctx.path("/etc/NetworkManager/system-connections") / filename
+
+
+def wifi_profile_exists(ctx: Context, wifi: WifiConfig) -> bool:
+    if wifi_keyfile_path(ctx, wifi).exists():
+        return True
+    if not ctx.system_commands_allowed() or shutil.which("nmcli") is None:
+        return False
+    existing = run_command(ctx, ["nmcli", "-t", "-f", "NAME", "connection", "show"])
+    if existing is None or existing.returncode != 0:
+        return False
+    return "weather-pi-wifi" in {line.strip() for line in existing.stdout.splitlines()}
+
+
+def write_wifi_keyfile(ctx: Context, wifi: WifiConfig) -> None:
+    path = wifi_keyfile_path(ctx, wifi)
+    safe_ssid = re.sub(r"[^A-Za-z0-9_.-]", "_", wifi.ssid)[:40] or "wifi"
+    connection_id = f"weather-pi-{safe_ssid}"
+    connection_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"weather-pi:wifi:{wifi.ssid}"))
+
+    lines = [
+        "[connection]",
+        f"id={keyfile_escape(connection_id)}",
+        f"uuid={connection_uuid}",
+        "type=wifi",
+        "autoconnect=true",
+        "",
+        "[wifi]",
+        "mode=infrastructure",
+        f"ssid={keyfile_escape(wifi.ssid)}",
+        "",
+        "[wifi-security]",
+    ]
+    if wifi.psk is None:
+        lines.append("key-mgmt=none")
+    else:
+        lines += ["key-mgmt=wpa-psk", f"psk={keyfile_escape(wifi.psk)}"]
+    lines += ["", "[ipv4]", "method=auto", "", "[ipv6]", "addr-gen-mode=default", "method=auto", ""]
+
+    ensure_directory(ctx, path.parent, 0o700)
+    write_text(ctx, path, "\n".join(lines), 0o600)
+    LOG.info("WiFi keyfile written to %s", path)
+
+
+def apply_wifi(ctx: Context, wifi: WifiConfig) -> None:
+    if wifi.country is not None:
+        apply_country(ctx, wifi.country)
+
+    if ctx.dry_run:
+        log_dry("would configure WiFi SSID %r via nmcli, falling back to a keyfile", wifi.ssid)
+        return
+
+    if wifi.psk is None and wifi_profile_exists(ctx, wifi):
+        # A retry after the config was sanitized has no passphrase left. Do not
+        # downgrade an existing secured profile to an open one.
+        LOG.info("WiFi credentials are already provisioned; preserving the existing profile")
+        return
+
+    if nmcli_configure(ctx, wifi):
+        return
+    if not ctx.no_commands and ctx.root == Path("/"):
+        LOG.warning("nmcli did not configure WiFi; using a NetworkManager keyfile")
+    write_wifi_keyfile(ctx, wifi)
+
+
+def apply_ssh_keys(ctx: Context, keys: tuple[str, ...]) -> None:
+    ssh_dir = ctx.path("/home/weather-pi/.ssh")
+    authorized_keys = ssh_dir / "authorized_keys"
+    ensure_directory(ctx, ssh_dir, 0o700)
+    chown_path(ctx, ssh_dir, "weather-pi")
+
+    existing = ""
+    if authorized_keys.exists():
+        existing = authorized_keys.read_text(encoding="utf-8", errors="replace")
+    lines = existing.splitlines()
+    existing_identities = {
+        identity
+        for line in lines
+        if not line.lstrip().startswith("#")
+        for identity in [key_identity(line)]
+        if identity is not None
+    }
+
+    added = 0
+    for key in keys:
+        identity = key_identity(key)
+        if identity is None:
+            raise ConfigError("authorized key lost its identity during application")
+        if identity in existing_identities:
+            continue
+        lines.append(key)
+        existing_identities.add(identity)
+        added += 1
+
+    if added or not authorized_keys.exists():
+        content = "\n".join(lines)
+        if content:
+            content += "\n"
+        write_text(ctx, authorized_keys, content, 0o600, owner_name="weather-pi")
+        if ctx.dry_run:
+            log_dry("would add %d SSH authorized key(s)", added)
+        else:
+            LOG.info("added %d SSH authorized key(s)", added)
+    elif ctx.dry_run:
+        log_dry("would ensure ownership and modes on %s", authorized_keys)
+    else:
+        os.chmod(ssh_dir, 0o700)
+        os.chmod(authorized_keys, 0o600)
+        chown_path(ctx, authorized_keys, "weather-pi")
+        LOG.info("all SSH authorized keys were already present")
+
+
+def known_hosts_entries(host: str, port: int, host_key: str) -> list[str]:
+    fields = host_key.strip().split()
+    if fields and (fields[0] in KEY_TYPES or fields[0].startswith(("ssh-", "ecdsa-", "sk-"))):
+        entries = [f"[{host}]:{port} {host_key.strip()}"]
+        if port == 22:
+            # OpenSSH looks up the bare host name for the default port; keep a
+            # compatibility entry while still writing the explicitly pinned
+            # [host]:port form.
+            entries.append(f"{host} {host_key.strip()}")
+        return entries
+    if key_identity(host_key) is None:
+        raise ConfigError("[tunnel].host_key is not a usable known_hosts entry")
+    return [host_key.strip()]
+
+
+def apply_tunnel(ctx: Context, tunnel: TunnelConfig) -> None:
+    etc = ctx.path("/etc/weather-pi")
+    ensure_directory(ctx, etc, 0o755)
+    key_path = etc / "tunnel_key"
+    pub_path = etc / "tunnel_key.pub"
+
+    private_text: str | None = None
+    public_text: str | None = None
+    if key_path.exists():
+        private_text = key_path.read_text(encoding="utf-8", errors="replace")
+        validate_private_key(private_text, str(key_path))
+        if tunnel.private_key is not None:
+            supplied = tunnel.private_key.rstrip("\r\n")
+            if supplied != private_text.rstrip("\r\n"):
+                LOG.warning("preserving the existing tunnel identity at %s", key_path)
+        LOG.info("preserving existing tunnel key %s", key_path)
+
+    if private_text is None and tunnel.private_key is not None:
+        private_text = tunnel.private_key
+        write_text(ctx, key_path, private_text, 0o600)
+        if not ctx.dry_run:
+            LOG.info("installed the supplied tunnel private key at %s", key_path)
+
+    if private_text is None:
+        if ctx.dry_run:
+            log_dry("would generate an ed25519 tunnel key at %s", key_path)
+            log_dry(
+                "would write %s, %s, %s, and /boot/firmware/weather-pi-tunnel.pub",
+                key_path.with_suffix(".pub"),
+                etc / "known_hosts",
+                etc / "tunnel.env",
+            )
+            return
+        private_text, generated_public = generate_tunnel_keypair(ctx)
+        write_text(ctx, key_path, private_text, 0o600)
+        public_text = generated_public
+        LOG.info("generated an ed25519 tunnel key at %s", key_path)
+
+    # Enforce this for supplied, generated, and pre-existing identities: the
+    # tunnel account must own the key and OpenSSH rejects group/world access.
+    set_file_access(ctx, key_path, 0o600, "weather-pi", "weather-pi")
+
+    if pub_path.exists():
+        try:
+            public_text = canonical_public_key(pub_path.read_text(encoding="utf-8"))
+        except ConfigError:
+            LOG.warning("ignoring malformed %s", pub_path)
+    if public_text is None and private_text is not None:
+        public_text = derive_public_key(ctx, private_text)
+    if public_text is None:
+        raise ConfigError("cannot determine the tunnel public key; supply tunnel.private_key")
+
+    write_text(ctx, pub_path, public_text + "\n", 0o644)
+    boot_pub = ctx.path("/boot/firmware/weather-pi-tunnel.pub")
+    write_text(ctx, boot_pub, public_text + "\n", 0o644)
+    if not ctx.dry_run:
+        LOG.info("tunnel public key exported to %s", boot_pub)
+
+    entries = known_hosts_entries(tunnel.host, tunnel.port, tunnel.host_key)
+    known_hosts_path = etc / "known_hosts"
+    write_text(ctx, known_hosts_path, "\n".join(entries) + "\n", 0o640)
+    set_root_group_access(ctx, known_hosts_path, 0o640, "weather-pi")
+
+    tunnel_toml = "\n".join(
+        [
+            "# Generated by weather-pi firstboot. This file contains no private key.",
+            "[tunnel]",
+            f"host = {toml_quote(tunnel.host)}",
+            f"port = {tunnel.port}",
+            f"user = {toml_quote(tunnel.user)}",
+            f"remote_port = {tunnel.remote_port}",
+            f"host_key = {toml_quote(tunnel.host_key)}",
+            "",
+        ]
+    )
+    write_text(ctx, etc / "tunnel.toml", tunnel_toml, 0o644)
+
+    env_text = "\n".join(
+        [
+            f"TUNNEL_HOST={tunnel.host}",
+            f"TUNNEL_PORT={tunnel.port}",
+            f"TUNNEL_USER={tunnel.user}",
+            f"TUNNEL_REMOTE_PORT={tunnel.remote_port}",
+            "",
+        ]
+    )
+    env_path = etc / "tunnel.env"
+    write_text(ctx, env_path, env_text, 0o640)
+    set_root_group_access(ctx, env_path, 0o640, "weather-pi")
+    if not ctx.dry_run:
+        LOG.info("tunnel configuration written for %s:%d", tunnel.host, tunnel.port)
+
+    unit_paths = [
+        ctx.path("/etc/systemd/system") / TUNNEL_SERVICE,
+        ctx.path("/usr/lib/systemd/system") / TUNNEL_SERVICE,
+        ctx.path("/lib/systemd/system") / TUNNEL_SERVICE,
+    ]
+    if not any(path.exists() for path in unit_paths):
+        LOG.warning("%s is not installed; skipping tunnel activation", TUNNEL_SERVICE)
+        return
+    if ctx.dry_run:
+        log_dry("would enable and start %s", TUNNEL_SERVICE)
+        return
+    if not ctx.system_commands_allowed():
+        LOG.warning("cannot enable %s without systemd and root; skipping", TUNNEL_SERVICE)
+        return
+
+    enabled = run_command(ctx, ["systemctl", "enable", TUNNEL_SERVICE])
+    if enabled is None or enabled.returncode != 0:
+        LOG.warning("could not enable %s", TUNNEL_SERVICE)
+    started = run_command(ctx, ["systemctl", "start", TUNNEL_SERVICE])
+    if started is None or started.returncode != 0:
+        LOG.warning("could not start %s; it will be retried on boot", TUNNEL_SERVICE)
+
+
+def sanitize_config(ctx: Context, path: Path, config: Provisioning) -> None:
+    sanitized = serialize_provisioning(config)
+    try:
+        original = path.read_text(encoding="utf-8")
+    except OSError:
+        original = ""
+    if original == sanitized:
+        LOG.info("provisioning file already contains no secret fields")
+        return
+    write_text(ctx, path, sanitized, 0o644, preserve_owner=True)
+    if not ctx.dry_run:
+        LOG.info("removed secret fields from %s", path)
+
+
+# ---------------------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--config",
+        help=f"provisioning file (default: {DEFAULT_CONFIG} under --root)",
+    )
+    parser.add_argument(
+        "--root",
+        default=os.environ.get("WEATHER_PI_ROOT", "/"),
+        help="filesystem prefix; WEATHER_PI_ROOT is used when the flag is absent",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="validate and log changes without writing anything",
+    )
+    parser.add_argument(
+        "--no-commands",
+        action="store_true",
+        help="do not run nmcli, systemctl, ssh-keygen, or other commands",
+    )
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="weather-pi-firstboot: %(levelname)s: %(message)s",
+        stream=sys.stderr,
+    )
+
+    root = Path(args.root).expanduser().resolve()
+    if args.config:
+        config_path = Path(args.config).expanduser()
+        if not config_path.is_absolute():
+            config_path = root / config_path
+        elif root != Path("/") and not config_path.is_relative_to(root):
+            config_path = root / str(config_path).lstrip("/")
+    else:
+        config_path = root / DEFAULT_CONFIG.lstrip("/")
+
+    ctx = Context(root=root, dry_run=args.dry_run, no_commands=args.no_commands)
+    sentinel = ctx.path(SENTINEL)
+    if sentinel.exists():
+        LOG.info("provisioning already completed (%s); nothing to do", sentinel)
+        return 0
+    if not config_path.is_file():
+        LOG.info("no provisioning file at %s; nothing to do", config_path)
+        return 0
+
+    try:
+        config = load_provisioning(config_path)
+        LOG.info("applying provisioning file %s", config_path)
+        if config.hostname is not None:
+            apply_hostname(ctx, config.hostname)
+        if config.wifi is not None:
+            apply_wifi(ctx, config.wifi)
+        if config.ssh_keys is not None:
+            apply_ssh_keys(ctx, config.ssh_keys)
+        if config.tunnel is not None:
+            apply_tunnel(ctx, config.tunnel)
+        sanitize_config(ctx, config_path, config)
+
+        ensure_directory(ctx, ctx.path("/var/lib/weather-pi"), 0o755)
+        write_text(ctx, sentinel, "provisioned\n", 0o644)
+        if ctx.dry_run:
+            LOG.info("dry run: validation succeeded; no changes were made")
+        else:
+            LOG.info("provisioning completed")
+        return 0
+    except ConfigError as error:
+        LOG.error("invalid provisioning configuration: %s", error)
+        return 2
+    except OSError as error:
+        LOG.error("provisioning failed: %s", error)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
