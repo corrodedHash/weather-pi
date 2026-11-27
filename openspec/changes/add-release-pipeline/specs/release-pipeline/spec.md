@@ -105,7 +105,7 @@ The release process SHALL publish a `weather-pi-archive-keyring` package contain
 
 ### Requirement: Automated publication
 
-Pushing a tag matching `v*` SHALL run the project's checks and, only if they pass, publish the packages, repository metadata, keyring package, and `SHA256SUMS` to the repository host and the GitHub Release for that tag.
+Pushing a tag matching `v*` SHALL run the project's checks and, only if they pass, publish the application and keyring packages, repository metadata, and `SHA256SUMS` to the repository host and the GitHub Release for that tag.
 
 #### Scenario: Successful tag build
 

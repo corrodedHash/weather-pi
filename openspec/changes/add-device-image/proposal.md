@@ -7,8 +7,8 @@ There is no repeatable way to get a blank SD card to a working, configured devic
 ## What Changes
 
 - Build a bootable, dd-able image for the Pi Zero family from a declarative pi-gen stage.
-- Install `weather-pi` and `weather-pi-updater` at pinned versions from the project's signed apt repository, with the archive key, `signed-by` source, and origin pinning in place.
-- Enable the update timer, ship the download cache, and enable the boot-time dpkg recovery unit so the device can update and recover without manual setup.
+- Install `weather-pi` and `weather-pi-archive-keyring` at pinned versions from the project's signed apt repository, with the archive key, `signed-by` source, and origin pinning in place.
+- Allow the project origin in `unattended-upgrades`, keep the download cache, and leave Debian security updates on the distribution's standard path so the device updates without project-owned units.
 - Run the service as an unprivileged user with the minimum group access it needs for SPI and GPIO.
 - Enable SPI, configure a minimal package set, and validate the sample configuration during the build.
 - Provision WiFi, SSH authorized keys, hostname, and tunnel settings from a file on the FAT boot partition at first boot; bake no secrets into the image.
@@ -29,5 +29,5 @@ There is no repeatable way to get a blank SD card to a working, configured devic
 
 - New: `image/` (pi-gen stage, first-boot script, apt configuration, config templates), `docs/imaging.md`, `mise.toml` image task
 - Uses the packages, repository, and keyring from `add-release-pipeline`; the build fails if repository metadata does not verify
-- Depends on `add-signed-updater` for the updater package, timer, and recovery unit that must be enabled in the image
+- Depends on `add-unattended-upgrades` for the origin allowlist and operator recovery behaviour
 - Affects `assets/weather-pi.service` and the config path migration

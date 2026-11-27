@@ -22,7 +22,7 @@ See `proposal.md` for motivation. Current constraints:
 
 - Bit-for-bit reproducible rebuilds of the Rust binaries or the packages (timestamps and dependency builds make this costly; not needed for the trust model).
 - Building the disk image in this change (see `add-device-image`).
-- Implementing the update policy and health gate (see `add-signed-updater`).
+- Implementing the update policy, schedule, and recovery workflow (see `add-unattended-upgrades`).
 - Signing boot artifacts or kernel images (RAUC/Mender remain out of scope).
 
 ## Decisions
@@ -41,10 +41,9 @@ Add `mise.toml` with tasks `check`, `build:armv6`, `build:arm64`, `package`, `re
 
 `cargo-deb` produces `weather-pi_<version>_<arch>.deb` with almost no packaging code: the binary has no runtime dependencies, the unit and assets are static, and conffiles cover the sample configuration. A tarball would need a custom install path, a custom file inventory, and a custom integrity check, all of which `dpkg` already provides (`dpkg -L`, `dpkg -V`, `dpkg-query -W`).
 
-Package split, so a bad application release cannot break the update path:
+Package split:
 
-- `weather-pi` — binary, unit, assets, sample configuration. Updated automatically.
-- `weather-pi-updater` — the wrapper script, apt source/keyring/preferences, timer and service. Updated only by an explicit operator action.
+- `weather-pi` — binary, unit, assets, sample configuration.
 - `weather-pi-archive-keyring` — repository trust anchor; see key rotation below.
 
 Both packages share one version derived from the tag, so an operator can tell which image state a device came from. `Architecture: armhf` for armv6/armv7 and `arm64` for aarch64; no `any`/`all` games, because the repository is small.
@@ -114,7 +113,7 @@ A release that cannot start is not a release. The unit file gains the missing ap
 
 1. Land toolchain pin, packaging, and the packaging fixes; verify the current device still starts with `/etc/skyscreen` present.
 2. Create the archive key and publish an empty signed repository; verify `apt-get update` succeeds on a scratch Raspberry Pi OS container.
-3. Cut `v0.2.0`; CI publishes both packages and the keyring package.
+3. Cut `v0.2.0`; CI publishes the application and keyring packages.
 4. Point the image change at the pinned version.
 5. Remove the legacy path fallback in the following minor release.
 

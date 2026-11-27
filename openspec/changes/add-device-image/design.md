@@ -25,7 +25,7 @@ See `proposal.md`. Constraints that shape the approach:
 - 64-bit image variants.
 - Whole-disk A/B updates or signed boot (RAUC); the package update path covers the software we change most.
 - Multiple device profiles or a fleet provisioning server.
-- Changing the repository configuration on an existing device; the image ships it once and the updater package owns it afterwards.
+- Changing the repository configuration on an existing device; the image ships it once and later changes are deliberate operator edits.
 
 ## Decisions
 
@@ -41,7 +41,7 @@ Because 32-bit userspace runs on armv8, a single armhf image covers the whole Ze
 
 ### Install packages from the signed repository, not from a tarball
 
-The stage adds the archive key to `/usr/share/keyrings`, writes the `signed-by` source, and runs `apt-get install weather-pi=<version> weather-pi-updater=<version>` inside the chroot. This exercises exactly the path the device uses later: if the repository metadata or a package hash does not verify, the image build fails.
+The stage adds the archive key to `/usr/share/keyrings`, writes the `signed-by` source, and runs `apt-get install weather-pi=<version> weather-pi-archive-keyring=<version>` inside the chroot. This exercises exactly the path the device uses later: if the repository metadata or a package hash does not verify, the image build fails.
 
 Alternatives:
 
@@ -53,12 +53,13 @@ The pinned version is recorded as an argument to `mise run image`, so an image c
 ### Configuration layout
 
 - `/etc/apt/sources.list.d/weather-pi.list` — `signed-by=` source for the project repository.
-- `/etc/apt/preferences.d/weather-pi` — `o=weather-pi` pin, priority 500.
+- `/etc/apt/preferences.d/weather-pi.pref` — `o=weather-pi` pin, priority 500.
 - `/etc/apt/apt.conf.d/90weather-pi` — `Acquire::Check-Valid-Until`, `APT::Keep-Downloaded-Packages`, retries, lock timeout.
+- `/etc/apt/apt.conf.d/20auto-upgrades` — `APT::Periodic::Update-Package-Lists` and `APT::Periodic::Unattended-Upgrade` set to `1`.
+- `/etc/apt/apt.conf.d/51weather-pi-unattended` — the project origin in the unattended-upgrades allowlist.
 - `/usr/share/keyrings/weather-pi-archive.gpg` — archive public key, from `weather-pi-archive-keyring`.
 - `/etc/weather-pi/<app>.toml` — conffiles installed by the application package.
 - `/usr/share/weather-pi/*.bmp` — assets from the application package.
-- `/var/lib/weather-pi/` — updater state directory.
 - `/etc/weather-pi/build-info` — base release, pi-gen revision, repository `Date`, package versions.
 
 `/etc/weather-pi/update.pub` from the earlier design is removed; the apt keyring is the only trust anchor.
@@ -79,17 +80,15 @@ Alternative considered: Raspberry Pi Imager's `custom.toml` preconfiguration. Re
 
 ### Update readiness
 
-The image enables `weather-pi-update.timer`, ships an empty `/var/cache/apt/archives` with `Keep-Downloaded-Packages` on, and enables `weather-pi-recover.service`. The updater package is installed but not upgraded automatically; the image is the initial delivery vehicle, after which the updater manages the application and the operator manages the updater.
-
-`unattended-upgrades` is configured to ignore the `weather-pi` origin, so there is exactly one automatic path per package class.
+The image installs `unattended-upgrades`, enables periodic updates and unattended upgrades in `20auto-upgrades`, adds the project origin to the allowed origins, and leaves the distribution's own origins intact. It enables `APT::Keep-Downloaded-Packages` so archives stay in `/var/cache/apt/archives`, and ships no project-owned update timer, recovery unit, or state directory. After first boot the standard `apt-daily-upgrade.timer` is the only update scheduler; an update that installs successfully is not health-checked or rolled back automatically.
 
 ### Minimal package set
 
-Install only: `ca-certificates`, `curl`, `iputils-ping` (the greeter shells out to `ping`), `openssh-client` and `openssh-server` for the tunnel, `zstd` at build time only, and the base Lite packages. `apt` and `gpgv` come from the base and are sufficient for verification. No compilers or development tools in the image.
+Install only: `ca-certificates`, `curl`, `iputils-ping` (the greeter shells out to `ping`), `openssh-client` and `openssh-server` for the tunnel, `unattended-upgrades`, `zstd` at build time only, and the base Lite packages. `apt` and `gpgv` come from the base and are sufficient for verification. No compilers or development tools in the image.
 
 ### Runtime hardening
 
-`User=weather-pi`, `SupplementaryGroups=spi gpio`, `Type=notify`, `WatchdogSec=60`, `Restart=on-failure`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`. No `ReadWritePaths` is needed now that the application only signals systemd and no longer writes a heartbeat. Do not set a capability bounding set that would break `/dev/gpiochip` or `/dev/spidev` access. Drop `chrt`; the app has no realtime requirement and cannot take `CAP_SYS_NICE`.
+`User=weather-pi`, `SupplementaryGroups=spi gpio`, `Type=simple`, `Restart=on-failure`, `RestartSec=5s`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`. No `ReadWritePaths` is needed. Do not set a capability bounding set that would break `/dev/gpiochip` or `/dev/spidev` access. Drop `chrt`; the app has no realtime requirement and cannot take `CAP_SYS_NICE`.
 
 ### Image integrity
 
@@ -113,11 +112,11 @@ The image is rebuildable but not bit-identical: Debian package repositories move
 
 1. Build a candidate image with the current release and boot it on the Zero.
 2. Confirm WiFi, service start, display output, `apt-get update`, and SSH over the tunnel.
-3. Confirm `weather-pi-update --check` is a no-op and the timer is enabled.
+3. Confirm `unattended-upgrade --dry-run -d` lists the project origin and reports no pending changes, and that `apt-daily-upgrade.timer` is enabled.
 4. Flash a second card for the Zero 2 W target (same image).
 5. Publish the image only after both boots succeed.
 
-Rollback is re-flashing the previous published image; package-level rollback is handled by the updater.
+Rollback is re-flashing the previous published image; a package-level downgrade is an explicit operator command using a retained version.
 
 ## Open Questions
 

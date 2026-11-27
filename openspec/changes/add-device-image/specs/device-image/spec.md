@@ -54,12 +54,12 @@ First-boot provisioning SHALL be safe to re-run and SHALL NOT overwrite an exist
 
 ### Requirement: Installed layout
 
-The image SHALL install the application and updater packages in fixed documented paths, and the application MUST start using the shipped sample configuration.
+The image SHALL install the application and archive keyring packages in fixed documented paths, and the application MUST start using the shipped sample configuration.
 
 #### Scenario: Installed paths
 
 - **WHEN** the image is mounted
-- **THEN** the binary is at `/usr/bin/weather-pi`, assets under `/usr/share/weather-pi`, configuration under `/etc/weather-pi`, the updater at `/usr/sbin/weather-pi-update`, and the unit at `/etc/systemd/system/weather-pi.service`
+- **THEN** the binary is at `/usr/bin/weather-pi`, assets under `/usr/share/weather-pi`, configuration under `/etc/weather-pi`, the archive key at `/usr/share/keyrings/weather-pi-archive.gpg`, and the unit at `/etc/systemd/system/weather-pi.service`
 
 #### Scenario: Sample config is valid
 
@@ -82,12 +82,12 @@ The image build SHALL install only packages that resolve from repository metadat
 
 ### Requirement: Update-ready image
 
-The image SHALL ship the archive keyring, the signed repository source, the origin pin, the update timer, and the boot-time package recovery unit, and the application MUST run with systemd readiness and watchdog enabled.
+The image SHALL ship the archive keyring, the signed repository source, the origin pin, the download-cache configuration, periodic unattended-upgrade enablement, and an unattended-upgrades allowlist containing the project origin while preserving the distribution's own origins.
 
 #### Scenario: Update path present after first boot
 
 - **WHEN** the freshly booted device is inspected
-- **THEN** `apt-get update` verifies the repository, the update timer is enabled, and `weather-pi-update --check` runs successfully as a no-op
+- **THEN** `apt-get update` verifies the repository, `apt-daily-upgrade.timer` is enabled, and `unattended-upgrade --dry-run -d` lists the project origin
 
 #### Scenario: Origin pin
 

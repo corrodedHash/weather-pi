@@ -87,12 +87,12 @@ The project SHALL provide a command that copies configuration and assets to the 
 
 ### Requirement: Package state visibility
 
-The project SHALL provide a read-only status command that reports the tunnel, the application service, the installed and available package versions, the update timer, and the last update result, and MUST work while the application is stopped.
+The project SHALL provide a read-only status command that reports the tunnel, the application service, the installed and candidate package versions, the unattended-upgrades timer, and the last unattended-upgrade result, and MUST work while the application is stopped.
 
 #### Scenario: Status over the tunnel
 
 - **WHEN** the operator runs the status command with a reachable tunnel and a stopped application
-- **THEN** it prints the tunnel state, installed and candidate versions, timer state, and last update result without failing
+- **THEN** it prints the tunnel state, installed and candidate versions, the `apt-daily-upgrade.timer` state, and the last unattended-upgrade result without failing
 
 #### Scenario: Update available
 
@@ -101,14 +101,19 @@ The project SHALL provide a read-only status command that reports the tunnel, th
 
 ### Requirement: Recovery path
 
-The operator SHALL be able to reach the device over the tunnel and roll back a bad package release or restart the application using the installed updater.
+The operator SHALL be able to reach the device over the tunnel and recover a bad package release or restart the application using standard `apt`, `dpkg`, and `systemctl` commands.
 
 #### Scenario: Broken update
 
 - **WHEN** the application is failing after an update and the tunnel is available
-- **THEN** the operator can connect over the VPS, run the updater's rollback, and observe the service return to the last-good version
+- **THEN** the operator can connect over the VPS, explicitly install a retained previous version, and observe the service return to the previous behaviour
 
-#### Scenario: Updater upgrade
+#### Scenario: Interrupted installation
 
-- **WHEN** the operator deliberately upgrades the updater package over the tunnel
-- **THEN** only that package changes and the application keeps running
+- **WHEN** dpkg left the package half-configured
+- **THEN** the operator can complete it over the tunnel with `dpkg --configure -a` without reflashing
+
+#### Scenario: Restart only
+
+- **WHEN** the operator restarts the service over the tunnel
+- **THEN** the installed package version is unchanged

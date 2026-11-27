@@ -8,7 +8,7 @@ The binary is currently produced by an unpinned `build.sh` that assumes a nightl
 
 - Pin the required nightly Rust toolchain in the repository and drive builds through mise tasks.
 - Stamp the binary with a version derived from the git tag and expose it via `--version`.
-- Package the application as a Debian package (`weather-pi`) for `armhf` and `arm64`, plus a `weather-pi-updater` package that carries the image-resident update tooling.
+- Package the application as a Debian package (`weather-pi`) for `armhf` and `arm64`.
 - Publish a signed apt repository (`InRelease`/`Packages`) so the disk image and the device install and verify the same artifact through one standard trust path.
 - Keep the previous published versions in the repository pool so an operator can downgrade deliberately.
 - Publish a `weather-pi-archive-keyring` package so the repository signing key can be rotated without reflashing.
@@ -30,7 +30,7 @@ The binary is currently produced by an unpinned `build.sh` that assumes a nightl
 ## Impact
 
 - `Cargo.toml`, `src/main.rs`, `assets/weather-pi.service`, `assets/greeter.toml`, `build.sh`
-- New: `rust-toolchain.toml`, `mise.toml`, `packaging/weather-pi/`, `packaging/weather-pi-updater/`, `packaging/keyring/`, `scripts/apt-repo.sh`, `.github/workflows/release.yml`, `docs/releasing.md`
+- New: `rust-toolchain.toml`, `mise.toml`, `packaging/weather-pi/`, `packaging/keyring/`, `scripts/apt-repo.sh`, `.github/workflows/release.yml`, `docs/releasing.md`
 - Dev dependencies: `cross`, `cargo-deb`, `dpkg-dev`, `apt-ftparchive`, `gnupg` (all via mise)
 - Adds a `--version` CLI flag; no other runtime behavior changes
 - GitHub Pages (or equivalent static hosting) serves the apt repository; the signing key is held in a protected CI environment
