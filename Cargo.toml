@@ -43,7 +43,7 @@ assets = [
     ["assets/greeter.toml", "etc/weather-pi/greeter.toml", "644"],
     ["assets/countdown.toml", "etc/weather-pi/countdown.toml", "644"],
     ["assets/tunnel.toml", "etc/weather-pi/tunnel.toml", "644"],
-    ["assets/weather-pi-tunnel.service", "etc/systemd/system/weather-pi-tunnel.service", "644"],
+    ["assets/weather-pi-tunnel.service", "usr/lib/systemd/system/weather-pi-tunnel.service", "644"],
     ["assets/heart.bmp", "usr/share/weather-pi/heart.bmp", "644"],
     ["assets/heart_full.bmp", "usr/share/weather-pi/heart_full.bmp", "644"],
     ["assets/dickbutt.bmp", "usr/share/weather-pi/dickbutt.bmp", "644"],

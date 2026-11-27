@@ -171,7 +171,8 @@ for spec in \
     "usr/share/weather-pi/heart_full.bmp 644" \
     "usr/share/weather-pi/dickbutt.bmp 644" \
     "usr/lib/sysusers.d/weather-pi.conf 644" \
-    "usr/lib/systemd/system/weather-pi.service 644"; do
+    "usr/lib/systemd/system/weather-pi.service 644" \
+    "usr/lib/systemd/system/weather-pi-tunnel.service 644"; do
     read -r path expected_mode <<<"$spec"
     assert_member "$app_deb" "$path" "$expected_mode"
 done
