@@ -27,5 +27,9 @@ done <<<"$before"
 
 grep -Fq 'origin=weather-pi,archive=trixie' <<<"$after"
 
+# Re-run the static half of the installed verifier. The dry run is intentionally
+# skipped here: the build must not depend on a live candidate or network access.
+/usr/lib/weather-pi/check-update-config.sh --no-dry-run
+
 systemctl enable apt-daily-upgrade.timer >/dev/null
 systemctl is-enabled apt-daily-upgrade.timer | grep -qx enabled

@@ -56,6 +56,12 @@ The binary reports its version and target triple:
 weather-pi --version
 ```
 
+## Updating
+
+Devices install newer signed `weather-pi` packages through Debian's daily
+`unattended-upgrades` job. Discovery, schedule, logs, pinning, downgrades, and
+recovery are documented in [docs/updating.md](docs/updating.md).
+
 ## Releasing
 
 Packages, the signed apt repository, key handling and the tag workflow are
