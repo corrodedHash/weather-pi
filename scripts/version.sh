@@ -50,6 +50,7 @@ check_strictly_greater() {
 
     [[ -n "$candidate" ]] || die "candidate version is empty"
     [[ -f "$packages_file" ]] || return 0
+    command -v dpkg >/dev/null 2>&1 || die "required tool 'dpkg' is not installed"
 
     local version
     local -a versions=()

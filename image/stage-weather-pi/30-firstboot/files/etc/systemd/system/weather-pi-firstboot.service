@@ -1,0 +1,17 @@
+[Unit]
+Description=weather-pi first-boot provisioning
+Documentation=https://github.com/corrodedHash/weather-pi/blob/main/docs/imaging.md
+After=local-fs.target NetworkManager.service
+Wants=NetworkManager.service
+Before=weather-pi.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=300
+ExecStart=/usr/lib/weather-pi/firstboot --config /boot/firmware/weather-pi.cfg
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

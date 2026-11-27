@@ -24,8 +24,8 @@
 ## 4. Documentation and decision record
 
 - [ ] 4.1 Write `docs/updating.md` covering discovery, the daily timer, the dry run, logs, pinning and downgrading, conffile behaviour, the lack of automatic rollback, and interrupted-installation recovery; verify every command runs on the device
-- [ ] 4.2 Record the accepted trade-offs and the rejected wrapper design in the change notes, including the residual replay window and the manual rollback path
-- [ ] 4.3 Confirm `docs/releasing.md` no longer advertises an updater package or updater CLI (the package cleanup is tracked in `add-release-pipeline`)
+- [x] 4.2 Record the accepted trade-offs and the rejected wrapper design in the change notes, including the residual replay window and the manual rollback path
+- [x] 4.3 Confirm `docs/releasing.md` no longer advertises an updater package or updater CLI (the package cleanup is tracked in `add-release-pipeline`)
 
 ## 5. Hardware validation
 
@@ -35,3 +35,9 @@
 ## Workflow follow-up
 
 - Archive after an automatic update, a manual downgrade, and a power-loss recovery pass on hardware.
+
+## Status notes
+
+- 4.1 is written but still needs its commands checked on a real device; 4.2-4.3 are complete in the repository. `docs/releasing.md` was checked and has no updater-package or updater-CLI references (no edit was needed).
+- Locally verified: shell syntax, shellcheck, the check-script PASS/FAIL tests, and `mise x -- openspec validate --all`.
+- Still open: the image build/dry run, timer timing, a real automatic update, and conffile/downgrade/power-loss recovery on a scratch device or hardware (1.x-3.x verification and 5.x).

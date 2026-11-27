@@ -38,3 +38,24 @@
 ## Workflow follow-up
 
 - Archive after both models pass hardware validation.
+
+## Notes
+
+Locally implemented and verified without Docker or hardware:
+
+- `scripts/test-firstboot.sh` exercises hostname, WiFi, SSH key, tunnel
+  ownership/modes, secret removal, idempotence, invalid ports/TOML, absent
+  config, and dry-run behaviour against temporary roots.
+- `scripts/test-image-secrets.sh` proves the scanner rejects armored and binary
+  private keys and non-empty password assignments while passing the real stage.
+- `scripts/test-device-smoke-test.sh` stubs systemd, networking, and
+  unattended-upgrade to prove the smoke test fails on each broken condition.
+
+These tests are fixture or harness coverage only. **No Docker image build and no
+hardware boot were performed.** Checkboxes 3.3-3.6 and 4.2 therefore remain
+unchecked until a real image is built and booted.
+
+Still requires a privileged Docker build, signing material, or real hardware:
+the remaining unchecked tasks above, including a real `.img.zst` build and
+signature verification, the chroot package install and `dpkg -V` assertions,
+`build-info` after boot, and every hardware validation item.

@@ -1,2 +1,6 @@
 /target
 /dist
+
+# Python bytecode from local py_compile runs
+__pycache__/
+*.pyc

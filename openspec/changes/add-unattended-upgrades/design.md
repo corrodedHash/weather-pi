@@ -39,7 +39,7 @@ Unattended-Upgrade::Origins-Pattern {
 };
 ```
 
-The fragment is additive in intent but apt configuration files override list values, so the release's existing `Allowed-Origins`/`Origins-Pattern` handling is verified rather than assumed: the image task runs `unattended-upgrade --dry-run -d` and checks that both the distribution's origins and the project origin are listed. Debian security origins are never replaced.
+The fragment is additive in intent. apt appends list values across `apt.conf.d` fragments, but the release verifies this rather than assuming it: the image build asserts statically that both the distribution's origins and the project origin are in the effective list, and `unattended-upgrade --dry-run -d` after boot shows the same. Debian security origins are never replaced.
 
 The schedule is the distribution's `apt-daily-upgrade.timer` (with its randomized delay and `Persistent=true`), not a project timer. The image enables the daily job with `APT::Periodic::Update-Package-Lists "1"` and `APT::Periodic::Unattended-Upgrade "1"`, because installing the package alone does not guarantee that periodic upgrades are switched on. `unattended-upgrades` only upgrades packages already installed from an allowed origin, so the application and its keyring are eligible; unrelated packages are not.
 
@@ -61,9 +61,9 @@ This is the accepted cost of using the standard mechanism. A release that instal
 
 ### Conffiles, cache, and package scope
 
-`/etc/weather-pi/*.toml` are conffiles. `unattended-upgrades` runs dpkg non-interactively and keeps locally modified conffiles; the image task verifies this with an edited config so an upgrade cannot silently replace the operator's settings. Assets under `/usr/share/weather-pi` are replaced.
+`/etc/weather-pi/*.toml` are conffiles. `unattended-upgrades` runs dpkg non-interactively and keeps locally modified conffiles; if the new package also changes the same file, the package is held back and logged rather than prompted. The image task verifies this with an edited config so an upgrade cannot silently replace the operator's settings. Assets under `/usr/share/weather-pi` are replaced.
 
-`APT::Keep-Downloaded-Packages "true"` retains the installed archive in `/var/cache/apt/archives`, so a rollback can use the local copy even after the repository prunes that version. The repository's five-version retention is the fallback.
+`APT::Keep-Downloaded-Packages "true"` keeps archives fetched by apt. The automatic path's own `Unattended-Upgrade::Keep-Debs-After-Install` cleanup is left at its default, so the archive from the latest automatic install is removed after success; a cached earlier version, when present, and the repository's five-version retention are the rollback sources.
 
 Only packages installed from `origin=weather-pi` are candidates: `weather-pi` and `weather-pi-archive-keyring`. There is no updater package any more.
 
@@ -107,18 +107,65 @@ Residual risk, accepted: an attacker who controls the repository and the archive
 
 ### Update visibility
 
-`unattended-upgrades` logs to `/var/log/unattended-upgrades/` and the journal. The image smoke test and `docs/updating.md` use `--dry-run -d` to show the candidate and origin without changing anything. No project-specific status file is written, because the package database and apt are already the source of truth.
+`unattended-upgrades` logs to `/var/log/unattended-upgrades/`; the daily service and the application restart are visible in the journal. The image smoke test and `docs/updating.md` use `--dry-run -d` to show the candidate and origin without changing anything. No project-specific status file is written, because the package database and apt are already the source of truth.
 
 ## Risks / Trade-offs
 
 - **No automatic rollback** → a bad release stays until an operator intervenes. Accepted; the operator has a tunnel and retained versions.
 - **No health gate** → a release that installs but renders badly is not detected automatically. Mitigated by hardware validation before publishing and by fast manual recovery.
 - **Power loss during dpkg** → manual `dpkg --configure -a` over the tunnel. Accepted; the previous recovery unit was removed with the updater.
-- **Origin allowlist mistakes** → the project origin is not upgraded at all, or distribution origins are dropped. Verified with `--dry-run -d` in the image build and after boot.
+- **Origin allowlist mistakes** → the project origin is not upgraded at all, or distribution origins are dropped. Verified with static origin checks in the image build and with `--dry-run -d` after boot.
 - **Concurrent apt use** → `unattended-upgrades` and a manual `apt-get` can collide; apt's lock and `DPkg::Lock::Timeout` serialize them, and the operator waits for the daily run to finish.
 - **Keyring and application update together** → the keyring package may be unpacked in the same run as the application; this is intended, but a rotation that requires the new key before metadata verification must be staged as documented in `docs/releasing.md`.
 - **Replay within the validity window** → accepted and documented; short `Valid-Until`, HTTPS, and a protected signing key.
 - **No OS-level rollback** → out of scope; a bad base image is reflashed.
+
+## Decision record
+
+Accepted for this change:
+
+- **Standard scheduler only.** Debian's `unattended-upgrades`, driven by the
+  distribution's `apt-daily-upgrade.timer`; no project package, unit, timer,
+  state file, or CLI.
+- **No health gate.** A release that installs and starts is kept even if the
+  panel renders badly. Hardware validation before publication is the guard;
+  `Restart=on-failure` covers only a crashing binary.
+- **No automatic rollback.** The operator downgrades explicitly to a retained or
+  cached version and optionally holds it. There is no recorded "last good"
+  version.
+- **Replay within `Valid-Until`.** apt's version ordering prevents automatic
+  downgrades, and a seven-day signed-metadata window bounds replay. A
+  compromised key or physical access defeats a local counter, so none is added.
+- **Power-loss recovery is manual.** The device boots and the tunnel is
+  independent of the application; the operator runs `dpkg --configure -a` and
+  the standard reinstall path. No boot-time recovery unit is shipped.
+- **Conffiles can hold a package back.** Locally modified
+  `/etc/weather-pi/*.toml` files are never silently replaced. If the new package
+  also changes the same file, the run holds the package back and logs a
+  conffile-prompt warning; `--force-confold` and `--force-confnew` remain
+  explicit operator choices.
+- **An offline repository is a no-op.** The installed version and running
+  service are unchanged, and the next daily run retries. No rollback or restart
+  is triggered by a failed update.
+- **Package traffic bypasses the tunnel.** The SSH tunnel is for operator
+  access; apt uses its own direct HTTPS egress. No apt proxy is configured.
+
+Rejected:
+
+- **Updater inside the application binary.** Mixes display and update logic,
+  puts network code in the application, and still needs a restart and rollback
+  policy.
+- **`weather-pi-updater` package with a health-gated wrapper and project
+  timer.** Adds a package, unit, state file, and rollback logic; duplicates the
+  distribution scheduler; a reliable health signal is not available on a single
+  wall-mounted device.
+- **Project timer running `apt-get` directly.** Reimplements
+  `unattended-upgrades` and splits ownership of Debian security updates.
+- **`DPkg::Post-Invoke`/`Post-Invoke-Success` health hook.** Reintroduces the
+  wrapper and cannot decide whether to roll back without the same policy.
+- **Local sequence/anti-replay counter.** Does not defend against a compromised
+  signing key and is defeated by restoring the SD image; the `Valid-Until`
+  window and protected archive key are the accepted boundary.
 
 ## Migration Plan
 
@@ -130,5 +177,5 @@ Residual risk, accepted: an attacker who controls the repository and the archive
 
 ## Open Questions
 
-- Whether the release's unattended-upgrades configuration uses `Allowed-Origins` or `Origins-Pattern`; resolve by inspecting the image and recording the effective fragment.
+- Resolved: the image uses `Origins-Pattern` in `51weather-pi-unattended`, and the chroot check asserts that every distribution entry survives while the project entry is present.
 - How long the panel stays blank during an upgrade restart, and whether that is acceptable without a service restart policy of its own; measure during hardware validation.
