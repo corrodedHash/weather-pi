@@ -295,12 +295,14 @@ def run_command(
     *,
     check: bool = False,
     timeout: int = 30,
+    sensitive: bool = False,
 ) -> subprocess.CompletedProcess[str] | None:
+    display = f"{argv[0]} <arguments redacted>" if sensitive else " ".join(argv)
     if ctx.dry_run:
-        log_dry("would run: %s", " ".join(argv))
+        log_dry("would run: %s", display)
         return None
     if ctx.no_commands:
-        LOG.info("commands disabled; skipping: %s", " ".join(argv))
+        LOG.info("commands disabled; skipping: %s", display)
         return None
     try:
         result = subprocess.run(
@@ -313,13 +315,13 @@ def run_command(
     except (OSError, subprocess.TimeoutExpired) as error:
         if check:
             raise
-        LOG.warning("command failed to start (%s): %s", error, " ".join(argv))
+        LOG.warning("command failed to start (%s): %s", error, display)
         return None
     if result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip() or "no output"
         if check:
-            raise ConfigError(f"command failed ({result.returncode}): {' '.join(argv)}: {message}")
-        LOG.warning("command failed (%d): %s: %s", result.returncode, " ".join(argv), message)
+            raise ConfigError(f"command failed ({result.returncode}): {display}: {message}")
+        LOG.warning("command failed (%d): %s: %s", result.returncode, display, message)
     return result
 
 
@@ -784,7 +786,9 @@ def nmcli_configure(ctx: Context, wifi: WifiConfig) -> bool:
         command += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", wifi.psk]
     command += ["connection.autoconnect", "yes"]
 
-    result = run_command(ctx, command)
+    # The nmcli command carries the WPA passphrase in argv; keep it out of
+    # journal/log output if it fails.
+    result = run_command(ctx, command, sensitive=True)
     if result is None or result.returncode != 0:
         return False
     LOG.info("WiFi profile %s applied with nmcli", name)
