@@ -1,0 +1,3 @@
+# weather-pi release archive. The archive key is installed in the image and
+# every metadata and package hash is verified against it by apt.
+deb [signed-by=/usr/share/keyrings/weather-pi-archive.gpg] @WEATHER_PI_REPO_URL@ trixie main

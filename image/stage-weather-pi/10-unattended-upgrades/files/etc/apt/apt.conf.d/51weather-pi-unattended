@@ -1,0 +1,6 @@
+// Unattended-Upgrade::Origins-Pattern lists are additive across apt.conf.d
+// fragments, so the distribution origins in 50unattended-upgrades remain in
+// effect. The build asserts that both sets are present after this fragment.
+Unattended-Upgrade::Origins-Pattern {
+	"origin=weather-pi,archive=trixie";
+};

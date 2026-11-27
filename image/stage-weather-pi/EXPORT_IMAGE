@@ -1,0 +1,3 @@
+# The image name already identifies the project; do not inherit stage2's "-lite"
+# suffix.
+IMG_SUFFIX=""

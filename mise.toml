@@ -28,6 +28,10 @@ run = "bash scripts/build-packages.sh"
 description = "Regenerate and sign the apt repository"
 run = "bash scripts/apt-repo.sh"
 
+[tasks.image]
+description = "Build the Raspberry Pi device image with the pinned pi-gen stage"
+run = "bash image/build.sh"
+
 [tasks.sim]
 description = "Run the application in the desktop simulator"
 run = "cargo run -- greeter"
