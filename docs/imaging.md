@@ -232,13 +232,21 @@ When `[tunnel]` is present the program writes the paths expected by
 `weather-pi-tunnel.service`:
 
 ```text
-/etc/weather-pi/tunnel.toml        # no private key
-/etc/weather-pi/tunnel.env         # TUNNEL_HOST, TUNNEL_PORT, TUNNEL_USER, TUNNEL_REMOTE_PORT (0600)
-/etc/weather-pi/tunnel_key         # private identity (0600)
+/etc/weather-pi/tunnel.toml        # no private key, 0644
+/etc/weather-pi/tunnel.env         # TUNNEL_HOST, TUNNEL_PORT, TUNNEL_USER, TUNNEL_REMOTE_PORT (root:weather-pi 0640)
+/etc/weather-pi/tunnel_key         # private identity (weather-pi:weather-pi 0600)
 /etc/weather-pi/tunnel_key.pub     # public half (0644)
-/etc/weather-pi/known_hosts        # pinned host key (0644)
+/etc/weather-pi/known_hosts        # pinned host key (root:weather-pi 0640)
 /boot/firmware/weather-pi-tunnel.pub
 ```
+
+First boot enforces those ownerships and modes for supplied, generated, and
+pre-existing tunnel keys: `tunnel_key` is always owned `weather-pi:weather-pi`
+with no group or world permission, while `tunnel.env` and `known_hosts` are
+readable by the `weather-pi` group so the unit can read them. On a `--root`
+fixture run, a missing `weather-pi` user or group skips the chown but still
+applies the mode; on the real device running as root, a missing user or group is
+an error.
 
 `weather-pi-tunnel.service` is enabled and started when it is installed. If the
 unit is not present, first boot warns and continues; the runtime package can be

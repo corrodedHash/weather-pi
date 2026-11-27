@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import grp
 import logging
 import os
 import pwd
@@ -139,6 +140,67 @@ def resolve_owner(name: str) -> tuple[int, int] | None:
     except KeyError:
         return None
     return entry.pw_uid, entry.pw_gid
+
+
+def resolve_group(name: str) -> int | None:
+    try:
+        return grp.getgrnam(name).gr_gid
+    except KeyError:
+        return None
+
+
+def set_file_access(
+    ctx: Context,
+    path: Path,
+    mode: int,
+    owner_name: str,
+    group_name: str,
+) -> None:
+    """Enforce mode and owner:group, tolerating missing test identities.
+
+    The mode is always applied. A non-real root or a non-root caller cannot
+    chown, so the ownership step is skipped for fixture tests; on the real
+    device root "/" running as root, a missing user/group or a chown failure is
+    fatal.
+    """
+    if ctx.dry_run:
+        log_dry("would set %s to mode %04o owned %s:%s", path, mode, owner_name, group_name)
+        return
+
+    os.chmod(path, mode)
+
+    owner = resolve_owner(owner_name)
+    group_id = resolve_group(group_name)
+    missing = []
+    if owner is None:
+        missing.append(f"user '{owner_name}'")
+    if group_id is None:
+        missing.append(f"group '{group_name}'")
+    if missing:
+        if ctx.root == Path("/") and os.geteuid() == 0:
+            raise ConfigError(
+                f"cannot set ownership of {path}: {' and '.join(missing)} does not exist"
+            )
+        LOG.info("skipping chown of %s: %s not found", path, " and ".join(missing))
+        return
+
+    if os.geteuid() != 0:
+        if ctx.root == Path("/"):
+            LOG.warning("not running as root; cannot set ownership of %s", path)
+        else:
+            LOG.info("skipping chown of %s: test run is not root", path)
+        return
+
+    try:
+        os.chown(path, owner[0], group_id)
+    except PermissionError:
+        if ctx.root == Path("/") and os.geteuid() == 0:
+            raise
+        LOG.info("skipping chown of %s: permission denied in test run", path)
+
+
+def set_root_group_access(ctx: Context, path: Path, mode: int, group_name: str) -> None:
+    set_file_access(ctx, path, mode, "root", group_name)
 
 
 def chown_path(ctx: Context, path: Path, owner_name: str) -> None:
@@ -898,6 +960,10 @@ def apply_tunnel(ctx: Context, tunnel: TunnelConfig) -> None:
         public_text = generated_public
         LOG.info("generated an ed25519 tunnel key at %s", key_path)
 
+    # Enforce this for supplied, generated, and pre-existing identities: the
+    # tunnel account must own the key and OpenSSH rejects group/world access.
+    set_file_access(ctx, key_path, 0o600, "weather-pi", "weather-pi")
+
     if pub_path.exists():
         try:
             public_text = canonical_public_key(pub_path.read_text(encoding="utf-8"))
@@ -915,7 +981,9 @@ def apply_tunnel(ctx: Context, tunnel: TunnelConfig) -> None:
         LOG.info("tunnel public key exported to %s", boot_pub)
 
     entries = known_hosts_entries(tunnel.host, tunnel.port, tunnel.host_key)
-    write_text(ctx, etc / "known_hosts", "\n".join(entries) + "\n", 0o644)
+    known_hosts_path = etc / "known_hosts"
+    write_text(ctx, known_hosts_path, "\n".join(entries) + "\n", 0o640)
+    set_root_group_access(ctx, known_hosts_path, 0o640, "weather-pi")
 
     tunnel_toml = "\n".join(
         [
@@ -940,7 +1008,9 @@ def apply_tunnel(ctx: Context, tunnel: TunnelConfig) -> None:
             "",
         ]
     )
-    write_text(ctx, etc / "tunnel.env", env_text, 0o600)
+    env_path = etc / "tunnel.env"
+    write_text(ctx, env_path, env_text, 0o640)
+    set_root_group_access(ctx, env_path, 0o640, "weather-pi")
     if not ctx.dry_run:
         LOG.info("tunnel configuration written for %s:%d", tunnel.host, tunnel.port)
 

@@ -51,7 +51,8 @@ fi
 for path in \
 	/usr/bin/weather-pi \
 	/etc/weather-pi/greeter.toml \
-	/usr/share/keyrings/weather-pi-archive.gpg; do
+	/usr/share/keyrings/weather-pi-archive.gpg \
+	/usr/lib/systemd/system/weather-pi.service; do
 	[[ -e "$path" ]] || die "required path is missing: $path"
 done
 

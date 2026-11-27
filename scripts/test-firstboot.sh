@@ -38,6 +38,13 @@ assert_mode() {
     [[ "$actual" == "$2" ]] || fail "$1 has mode $actual, expected $2"
 }
 
+assert_no_group_world() {
+    local actual
+    actual="$(stat -c '%a' "$1")"
+    (( (8#$actual & 077) == 0 )) ||
+        fail "$1 is accessible by group or others (mode $actual)"
+}
+
 assert_contains() {
     grep -Fq -- "$2" "$1" || fail "$1 does not contain: $2"
 }
@@ -136,11 +143,12 @@ assert_file "$root/etc/weather-pi/tunnel_key"
 assert_file "$root/etc/weather-pi/tunnel_key.pub"
 assert_file "$root/etc/weather-pi/known_hosts"
 assert_file "$root/boot/firmware/weather-pi-tunnel.pub"
-assert_mode "$root/etc/weather-pi/tunnel.env" 600
+assert_mode "$root/etc/weather-pi/tunnel.env" 640
 assert_mode "$root/etc/weather-pi/tunnel.toml" 644
 assert_mode "$root/etc/weather-pi/tunnel_key" 600
+assert_no_group_world "$root/etc/weather-pi/tunnel_key"
 assert_mode "$root/etc/weather-pi/tunnel_key.pub" 644
-assert_mode "$root/etc/weather-pi/known_hosts" 644
+assert_mode "$root/etc/weather-pi/known_hosts" 640
 assert_mode "$root/boot/firmware/weather-pi-tunnel.pub" 644
 
 assert_not_contains "$root/etc/weather-pi/tunnel.toml" "PRIVATE KEY"
@@ -194,12 +202,19 @@ after="$(snapshot "$root")"
 grep -Fq "already completed" <<<"$second_output" ||
     fail "the second run did not report the sentinel"
 
-echo "==> a retry after secret removal preserves the WiFi profile"
+echo "==> a retry after secret removal preserves the WiFi profile and fixes modes"
 rm -f "$root/var/lib/weather-pi/firstboot.done"
+chmod 0644 "$root/etc/weather-pi/tunnel_key"
+chmod 0600 "$root/etc/weather-pi/tunnel.env"
+chmod 0644 "$root/etc/weather-pi/known_hosts"
 python3 "$firstboot" --root "$root" --config "$config" --no-commands \
     >"$tmp/retry.out" 2>&1
 assert_contains "$keyfile" "psk=correct horse battery staple"
 assert_not_contains "$keyfile" "key-mgmt=none"
+assert_mode "$root/etc/weather-pi/tunnel_key" 600
+assert_no_group_world "$root/etc/weather-pi/tunnel_key"
+assert_mode "$root/etc/weather-pi/tunnel.env" 640
+assert_mode "$root/etc/weather-pi/known_hosts" 640
 
 echo "==> invalid tunnel port fails closed"
 bad_root="$tmp/bad-port"
@@ -276,7 +291,13 @@ EOF
 python3 "$firstboot" --root "$generated_root" --config "$generated_config"
 assert_file "$generated_root/etc/weather-pi/tunnel_key"
 assert_mode "$generated_root/etc/weather-pi/tunnel_key" 600
+assert_no_group_world "$generated_root/etc/weather-pi/tunnel_key"
 assert_file "$generated_root/etc/weather-pi/tunnel_key.pub"
+assert_mode "$generated_root/etc/weather-pi/tunnel_key.pub" 644
+assert_file "$generated_root/etc/weather-pi/tunnel.env"
+assert_mode "$generated_root/etc/weather-pi/tunnel.env" 640
+assert_file "$generated_root/etc/weather-pi/known_hosts"
+assert_mode "$generated_root/etc/weather-pi/known_hosts" 640
 assert_file "$generated_root/boot/firmware/weather-pi-tunnel.pub"
 assert_contains "$generated_root/etc/weather-pi/known_hosts" "[vps.example.com]:22 ssh-ed25519 "
 assert_contains "$generated_root/etc/weather-pi/known_hosts" "vps.example.com ssh-ed25519 "
