@@ -105,11 +105,6 @@ fi
 
 for target in "${targets[@]}"; do
     arch="$(deb_arch "$target")"
-    echo "==> weather-pi-updater $VERSION ($arch)"
-    stage_deb weather-pi-updater "$arch" \
-        packaging/weather-pi-updater/control \
-        packaging/weather-pi-updater/root
-
     echo "==> weather-pi-archive-keyring $VERSION ($arch)"
     stage_deb weather-pi-archive-keyring "$arch" \
         packaging/keyring/control \
