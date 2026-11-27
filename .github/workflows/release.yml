@@ -152,7 +152,7 @@ jobs:
           : >published-Packages
           for arch in armhf arm64; do
             url="$WEATHER_PI_PUBLISHED_BASE/dists/trixie/main/binary-$arch/Packages"
-            if ! status="$(curl -sS --retry 3 -o "published-$arch" -w '%{http_code}' "$url")"; then
+            if ! status="$(curl -sSL --retry 3 -o "published-$arch" -w '%{http_code}' "$url")"; then
               echo "::error::could not fetch $url"
               exit 1
             fi
