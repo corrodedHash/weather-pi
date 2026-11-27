@@ -1,0 +1,26 @@
+[Unit]
+Description=weather-pi reverse SSH tunnel
+Documentation=file:///etc/weather-pi/tunnel.toml
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/weather-pi/tunnel.env
+ConditionPathExists=/etc/weather-pi/tunnel_key
+ConditionPathExists=/etc/weather-pi/known_hosts
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=weather-pi
+Group=weather-pi
+EnvironmentFile=/etc/weather-pi/tunnel.env
+ExecStart=/usr/bin/ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/weather-pi/known_hosts -o IdentitiesOnly=yes -i /etc/weather-pi/tunnel_key -p ${TUNNEL_PORT} -R 127.0.0.1:${TUNNEL_REMOTE_PORT}:localhost:22 ${TUNNEL_USER}@${TUNNEL_HOST}
+Restart=always
+RestartSec=15s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

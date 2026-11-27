@@ -1,0 +1,38 @@
+# weather-pi tunnel configuration template.
+#
+# Installed as /etc/weather-pi/tunnel.toml by the weather-pi package. This file
+# documents and transports provisioning data; the running unit reads the
+# generated files /etc/weather-pi/tunnel.env, /etc/weather-pi/tunnel_key and
+# /etc/weather-pi/known_hosts. First boot writes those files from the
+# provisioning media.
+#
+# Never put a real private key in this repository file. The optional
+# private_key field exists so an operator can supply a pre-generated device key
+# on the provisioning media; that key is a secret exactly like the WiFi
+# passphrase and must be removed from the boot partition after first boot.
+
+[tunnel]
+# Host name or address of the VPS. Use a name that resolves before the tunnel
+# starts; the unit waits for network-online.target.
+host = "vps.example.invalid"
+
+# SSH port of the VPS sshd (not the remote port exposed by the tunnel).
+port = 22
+
+# Dedicated forwarding-only account created by scripts/vps-setup.sh.
+user = "weatherpi-tunnel"
+
+# Port on the VPS loopback interface that forwards to the device's sshd.
+# Choose one per device; the account's authorized_keys permitlisten pins it.
+remote_port = 2201
+
+# Public host key of the VPS, as printed by scripts/vps-setup.sh. This is a
+# public key, not a fingerprint and not a secret. The placeholder key below is
+# safe to commit; replace it with the real key from the VPS console.
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB REPLACE_WITH_VPS_HOST_KEY"
+
+# Optional: pre-generated OpenSSH private key for this device. Prefer letting
+# first boot generate the key and export the public half to
+# /boot/firmware/weather-pi-tunnel.pub. When supplied, keep this file off
+# shared media and delete it after enrollment.
+# private_key = """<private key contents; never commit this value>"""
