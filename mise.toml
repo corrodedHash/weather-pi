@@ -32,6 +32,14 @@ run = "bash scripts/apt-repo.sh"
 description = "Build the Raspberry Pi device image with the pinned pi-gen stage"
 run = "bash image/build.sh"
 
+[tasks.deploy]
+description = "Copy configuration and assets to the device over SSH and restart the service"
+run = "bash scripts/deploy.sh"
+
+[tasks.status]
+description = "Show tunnel, service and package state on the device"
+run = "bash scripts/status.sh"
+
 [tasks.sim]
 description = "Run the application in the desktop simulator"
 run = "cargo run -- greeter"
