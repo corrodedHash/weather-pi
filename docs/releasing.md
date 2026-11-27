@@ -45,7 +45,7 @@ binary reports the same string plus its target triple:
 
 ```sh
 weather-pi --version
-# weather-pi 0.2.0 (arm-unknown-linux-gnueabihf)
+# weather-pi 0.2.0-1 (arm-unknown-linux-gnueabihf)
 ```
 
 ## Repository layout
@@ -56,9 +56,9 @@ pool/main/w/weather-pi-archive-keyring/weather-pi-archive-keyring_0.2.0-1_armhf.
 dists/trixie/Release
 dists/trixie/InRelease
 dists/trixie/main/binary-armhf/Packages{,.gz}
-dists/trixie/main/binary-armhf/by-hash/SHA256/<hash>
+dists/trixie/main/binary-armhf/by-hash/{MD5Sum,SHA1,SHA256,SHA512}/<hash>
 dists/trixie/main/binary-arm64/Packages{,.gz}
-dists/trixie/main/binary-arm64/by-hash/SHA256/<hash>
+dists/trixie/main/binary-arm64/by-hash/{MD5Sum,SHA1,SHA256,SHA512}/<hash>
 ```
 
 `Release` carries `Origin: weather-pi`, `Suite: trixie`, `Codename: trixie`,
@@ -93,6 +93,11 @@ gpg --export --armor 0123456789ABCDEF \
 gpg --export-secret-keys --armor 0123456789ABCDEF > archive-private.asc
 ```
 
+The public keyring under `packaging/keyring/` is not secret and should be
+committed once the key exists. CI uses that file by default; the
+`WEATHER_PI_ARCHIVE_KEYRING_B64` environment secret can override it during a
+protected build.
+
 Store `archive-private.asc` as the `WEATHER_PI_ARCHIVE_KEY` secret in the
 protected GitHub Environment `release`. Protect the environment with required
 reviewers and restrict it to tags. Delete the offline copy only after the
@@ -101,8 +106,9 @@ must never enter the repository or a CI cache.
 
 For an offline signing flow, keep the private key off CI entirely: run
 `scripts/apt-repo.sh` on the offline machine with
-`WEATHER_PI_GPG_HOME` pointing at the keyring, then push the `apt` branch and
-publish with `workflow_dispatch`.
+`WEATHER_PI_GPG_HOME` pointing at the keyring, push the generated `apt` branch,
+and create the GitHub Release manually with `gh release create` and
+`gh release upload`. The tag-triggered workflow is the normal path.
 
 ## Cutting a release
 
@@ -115,10 +121,12 @@ publish with `workflow_dispatch`.
    git push origin v0.2.0
    ```
 
-4. CI runs checks, builds both architectures in parallel, builds all packages,
-   verifies the version is newer than the published one, signs the repository,
-   force-pushes the `apt` branch, and creates the GitHub Release with the `.deb`
-   files, `Packages`, `Release`, `InRelease`, and `SHA256SUMS`.
+4. CI runs checks, builds both architectures in parallel, verifies each
+   package, checks the version against the published index, signs the
+   repository, and restores the previous `apt` branch before regenerating it
+   so retained versions survive. It then force-pushes the `apt` branch and
+   creates the GitHub Release with the `.deb` files, `Packages-armhf`,
+   `Packages-arm64`, `Release`, `InRelease`, and `SHA256SUMS`.
 5. If any check fails, nothing is published; the previous `apt` tree keeps
    serving.
 
@@ -130,9 +138,61 @@ WEATHER_PI_VERSION=0.0.0-1 mise run package
 WEATHER_PI_VERSION=0.0.0-1 mise run repo
 ```
 
-## Verification
+## Local package and repository verification
 
-On a scratch Debian or Raspberry Pi OS host:
+Two scripts verify the release artifacts without Docker or a device. Both use
+`mktemp`, clean up after themselves, and never write outside `target/` or a
+temporary directory. Run them on a Debian/Ubuntu host with `dpkg-dev`,
+`apt-utils`, and `gnupg` installed:
+
+```sh
+mise install
+scripts/test-package.sh
+scripts/test-release-pipeline.sh
+```
+
+`scripts/test-package.sh` builds the host `x86_64-unknown-linux-gnu` package
+with a throwaway archive key (or `WEATHER_PI_ARCHIVE_KEYRING` / the committed
+`packaging/keyring/weather-pi-archive.gpg` if present), then checks the control
+fields, architecture, file list, modes, conffiles, `md5sums`, maintainer
+scripts, `systemd-analyze verify` under a temporary root, and finally runs
+`weather-pi --version`. It builds and inspects the keyring package as well.
+`systemd-analyze` is optional; that one check is skipped when it is not
+installed. A successful run ends with:
+
+```text
+PASS: package checks passed for weather-pi 0.0.0-1 (amd64)
+```
+
+The same script can inspect CI artifacts without rebuilding. For a cross
+package it skips executing the binary, but still checks every file and the unit:
+
+```sh
+scripts/test-package.sh --deb dist --arch armhf --version 0.2.0-1
+scripts/test-package.sh --deb dist --arch arm64 --version 0.2.0-1
+```
+
+`scripts/test-release-pipeline.sh` checks the tag mapping (`v1.2.3` becomes
+`1.2.3-1`), refuses equal and lower versions, generates a repository from dummy
+packages in a temporary directory with a throwaway GPG key, and asserts:
+
+- `Release` has `Origin`, `Suite`, `Codename`, `Valid-Until`, and
+  `Acquire-By-Hash: yes`;
+- `InRelease` verifies with `gpgv`;
+- five versions per architecture survive retention, in Debian version order,
+  and pruned versions disappear from both the pool and `Packages`;
+- the `by-hash` copies match the hashes in `Release`.
+
+A successful run ends with `PASS: release pipeline checks completed`. If
+`dpkg`, `apt-ftparchive`, `gpg`, or `gpgv` is missing, the affected checks print
+`SKIP:` with the reason and the script still exits 0. The release workflow runs
+both scripts in the `package-check` job and runs the package inspector against
+each matrix artifact.
+
+## Integration check on a published repository
+
+On a scratch Debian or Raspberry Pi OS host with the archive public key from
+the key ceremony:
 
 ```sh
 sudo install -d -m 0755 /usr/share/keyrings
@@ -147,6 +207,44 @@ sudo apt-get install weather-pi
 weather-pi --version
 dpkg -V weather-pi
 ```
+
+For an armhf or arm64 container (requires Docker or Podman on the host):
+
+```sh
+docker run --rm -it --platform linux/arm/v7 \
+  --add-host=host.docker.internal:host-gateway \
+  -v "$PWD:/src:ro" debian:trixie bash
+```
+
+Inside the container:
+
+```sh
+apt-get update
+apt-get install -y --no-install-recommends ca-certificates curl gnupg
+install -d -m 0755 /usr/share/keyrings
+cp /src/packaging/keyring/weather-pi-archive.gpg /usr/share/keyrings/
+echo "deb [signed-by=/usr/share/keyrings/weather-pi-archive.gpg] \
+https://corrodedhash.github.io/weather-pi/ trixie main" \
+  > /etc/apt/sources.list.d/weather-pi.list
+apt-get update
+apt-get install -y weather-pi
+weather-pi --version
+dpkg -V weather-pi
+```
+
+Use `--platform linux/arm64` for the arm64 check. To test a locally generated
+repository instead, publish a tree and point the container at the host:
+
+```sh
+# Host: package artifacts must already exist in dist/ for the target arch.
+WEATHER_PI_ARCHIVE_KEY=<key-fingerprint> \
+  DIST_DIR=dist REPO_DIR=target/repo scripts/apt-repo.sh
+python3 -m http.server 8000 --directory target/repo
+```
+
+Then use `http://host.docker.internal:8000` as the `deb` URL. A container is a
+good check for `apt-get update` and `apt-get install`; starting the service on a
+real Pi is covered by the device-image integration tasks.
 
 A tampered index or package makes `apt-get update` or the install fail; the
 installed version is left untouched. An expired `Valid-Until` makes apt refuse
@@ -190,31 +288,60 @@ reflashing.
 
 ## CI configuration
 
-The release workflow (`.github/workflows/release.yml`) runs on `v*` tags and
-uses the protected environment `release` for publishing. Configure:
+The release workflow (`.github/workflows/release.yml`) runs on `v*` tags. The
+`package` matrix and the `publish` job both use the protected environment
+`release`, so environment secrets are available where they are needed.
+Configure:
 
 | Name                                        | Kind   | Purpose                                              |
 | ------------------------------------------- | ------ | ---------------------------------------------------- |
 | `WEATHER_PI_ARCHIVE_KEY`                    | secret | Armored private archive key used to sign `InRelease` |
 | `WEATHER_PI_ARCHIVE_PASSPHRASE`             | secret | Passphrase for the archive key, if it has one        |
-| `WEATHER_PI_ARCHIVE_KEYRING_B64`            | secret | Base64 of the binary public keyring for the packages |
+| `WEATHER_PI_ARCHIVE_KEYRING_B64`            | secret | Optional override for the committed public keyring |
 
-Create the public-keyring value once:
+Create the public-keyring value once if you want the protected environment to
+override the committed file (the public key is not sensitive, but the override
+keeps a fork from building a keyring package with an unexpected trust anchor):
 
 ```sh
 base64 -w0 packaging/keyring/weather-pi-archive.gpg
 ```
 
-The workflow checks the version against the currently served `Packages`
-indexes, imports the key, generates `target/repo`, force-pushes it to the `apt`
-branch, then attaches the packages and metadata to the GitHub Release. Point
-GitHub Pages at the `apt` branch (root) so clients fetch the repository over
-HTTPS. If the repository is hosted elsewhere, set `WEATHER_PI_REPO_URL` in the
-workflow and update the source line template.
+The package job uses `WEATHER_PI_ARCHIVE_KEYRING_B64` when it is set and
+otherwise falls back to `packaging/keyring/weather-pi-archive.gpg` from the
+checkout, so a fork can still build packages after the key ceremony commits the
+public key.
+
+The workflow runs the checks and the host package/repository tests first. For
+each matrix entry it builds the application and keyring packages, verifies the
+package contents, and only then uploads the artifact. The publish job refuses a
+version that is not strictly greater than the served `Packages` indexes (and the
+restored `apt` branch), restores the existing `apt` branch so the five-version
+retention window spans releases, imports the key, generates and signs
+`target/repo`, force-pushes it, and attaches these files to the GitHub Release:
+
+```text
+weather-pi_<version>_armhf.deb
+weather-pi_<version>_arm64.deb
+weather-pi-archive-keyring_<version>_armhf.deb
+weather-pi-archive-keyring_<version>_arm64.deb
+SHA256SUMS
+Release
+InRelease
+Packages-armhf
+Packages-arm64
+```
+
+The two `Packages` assets are renamed because GitHub Release asset names must be
+unique. Point GitHub Pages at the `apt` branch (root) so clients fetch the
+repository over HTTPS. If the repository is hosted elsewhere, set
+`WEATHER_PI_REPO_URL` in the workflow and update the source line template.
 
 ## Missing tools
 
 `scripts/build-packages.sh` and `scripts/apt-repo.sh` fail with the name of the
-missing tool instead of producing a partial artifact. The release workflow uses
-an Ubuntu runner and installs `dpkg-dev`, `apt-utils`, and `gnupg`, so the CI
-path has the full toolset.
+missing tool instead of producing a partial artifact. `scripts/test-package.sh`
+and `scripts/test-release-pipeline.sh` report missing tools as `SKIP:` and exit
+0 so they are usable on a development host; the release workflow installs
+`dpkg-dev`, `apt-utils`, and `gnupg` on an Ubuntu runner, so its checks run
+fully.

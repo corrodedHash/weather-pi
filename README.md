@@ -33,6 +33,8 @@ mise run image        # build the Raspberry Pi device image
 mise run deploy       # copy configuration and assets over the tunnel, restart
 mise run status       # tunnel, service, package and update state
 mise run release      # validate a tag, build packages, generate the repository
+scripts/test-package.sh          # build and inspect a host package
+scripts/test-release-pipeline.sh # version, signing and retention checks
 ```
 
 `mise run deploy` and `mise run status` use the `weather-pi` SSH host alias;
