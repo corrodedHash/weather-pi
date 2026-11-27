@@ -18,16 +18,16 @@
 
 - [ ] 3.1 Install and enable the application unit with `weather-pi` user, `spi`/`gpio` groups, `Type=simple`, `Restart=on-failure`, and no `chrt`; verify `systemd-analyze verify` and a real boot
 - [ ] 3.2 Install config templates and assets through the package, enable SPI, and verify the service starts with the sample config on hardware
-- [ ] 3.3 Implement `weather-pi-firstboot.service` and its provisioning parser for hostname, WiFi, SSH keys, and tunnel target; verify each field is applied on a fresh card
-- [ ] 3.4 Make provisioning idempotent with a sentinel and preserve existing identities; verify a second boot changes nothing
-- [ ] 3.5 Remove secret fields from the boot partition after success and document rotation; verify the file no longer contains the passphrase
-- [ ] 3.6 Assert the secret-free property in the build (grep for key headers, passphrases, and the archive private key) and verify a build with a planted test secret fails
+- [x] 3.3 Implement `weather-pi-firstboot.service` and its provisioning parser for hostname, WiFi, SSH keys, and tunnel target; verify each field is applied on a fresh card
+- [x] 3.4 Make provisioning idempotent with a sentinel and preserve existing identities; verify a second boot changes nothing
+- [x] 3.5 Remove secret fields from the boot partition after success and document rotation; verify the file no longer contains the passphrase
+- [x] 3.6 Assert the secret-free property in the build (grep for key headers, passphrases, and the archive private key) and verify a build with a planted test secret fails
 - [ ] 3.7 Write `/etc/weather-pi/build-info` with base release, pi-gen revision, repository date, and package versions; verify it is present and correct after boot
 
 ## 4. Output and publication
 
 - [ ] 4.1 Emit `.img.zst`, `SHA256SUMS`, and a detached minisign signature; verify both from a clean download
-- [ ] 4.2 Add an on-device smoke test that checks service active state, network, display initialisation, and a no-change unattended-upgrades dry run; verify it fails when the unit is reverted
+- [x] 4.2 Add an on-device smoke test that checks service active state, network, display initialisation, and a no-change unattended-upgrades dry run; verify it fails when the unit is reverted
 
 ## 5. Hardware validation
 
@@ -38,3 +38,24 @@
 ## Workflow follow-up
 
 - Archive after both models pass hardware validation.
+
+## Notes
+
+Locally implemented and verified without Docker or hardware:
+
+- `scripts/test-firstboot.sh` exercises hostname, WiFi, SSH key, tunnel,
+  secret removal, idempotence, invalid ports/TOML, absent config, and dry-run
+  behaviour against temporary roots.
+- `scripts/test-image-secrets.sh` proves the scanner rejects armored and binary
+  private keys and non-empty password assignments while passing the real stage.
+- `scripts/test-device-smoke-test.sh` stubs systemd, networking, and
+  unattended-upgrade to prove the smoke test fails on each broken condition.
+
+Checkboxes in section 3 and item 4.2 record implementation plus fixture or
+harness coverage only; they are not hardware validation.
+
+Still requires a privileged Docker build, signing material, or real hardware:
+the remaining unchecked tasks above, including a real `.img.zst` build and
+signature verification, the chroot package install and `dpkg -V` assertions,
+`build-info` after boot, and every hardware validation item. No hardware
+validation has been performed.
