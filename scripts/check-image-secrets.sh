@@ -101,7 +101,7 @@ while IFS= read -r -d '' dir; do
             esac
         fi
         scan_gnupg "$file"
-    done < <(find "$dir" -type f -print0)
+    done < <(find "$dir" \( -name __pycache__ -o -name '*.pyc' \) -prune -o -type f -print0)
 done < <(printf '%s\0' "$@")
 
 if ((fail)); then

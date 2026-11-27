@@ -43,6 +43,12 @@ expect_pass "$clean"
 echo "==> real stage passes"
 expect_pass "$repo_root/image/stage-weather-pi"
 
+echo "==> generated Python bytecode is ignored"
+pycache="$tmp/pycache"
+mkdir -p "$pycache/__pycache__"
+printf 'cache for -----BEGIN OPENSSH PRIVATE KEY-----\n' >"$pycache/__pycache__/firstboot.pyc"
+expect_pass "$pycache"
+
 echo "==> armored private key fails"
 armored="$tmp/armored"
 mkdir -p "$armored"
