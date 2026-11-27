@@ -52,7 +52,6 @@ weather-pi --version
 
 ```
 pool/main/w/weather-pi/weather-pi_0.2.0-1_armhf.deb
-pool/main/w/weather-pi-updater/weather-pi-updater_0.2.0-1_armhf.deb
 pool/main/w/weather-pi-archive-keyring/weather-pi-archive-keyring_0.2.0-1_armhf.deb
 dists/trixie/Release
 dists/trixie/InRelease
@@ -165,8 +164,11 @@ sudo apt-get install --allow-downgrades weather-pi=<version>
 
 The device also keeps downloaded archives
 (`APT::Keep-Downloaded-Packages "true"`), so a rollback still works after the
-repository prunes an old version. The update wrapper prefers
-`/var/cache/apt/archives` before falling back to the repository.
+repository prunes an old version. Prefer the cached file when it is present:
+
+```sh
+sudo apt-get install /var/cache/apt/archives/weather-pi_<version>_<arch>.deb
+```
 
 There is no separate anti-rollback counter. The defenses are the seven-day
 `Valid-Until` window, the repository signature, and explicit operator action

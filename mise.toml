@@ -21,7 +21,7 @@ description = "Build the release binary for aarch64 (Raspberry Pi Zero 2 W, arm6
 run = "cross build --target aarch64-unknown-linux-gnu --release"
 
 [tasks.package]
-description = "Build the weather-pi, weather-pi-updater and keyring Debian packages"
+description = "Build the weather-pi and keyring Debian packages"
 run = "bash scripts/build-packages.sh"
 
 [tasks.repo]

@@ -1,2 +1,0 @@
-Acquire::Check-Valid-Until "true";
-APT::Keep-Downloaded-Packages "true";
