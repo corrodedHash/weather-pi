@@ -19,7 +19,7 @@
 - [x] 3.1 Add `packaging/weather-pi/` metadata for `cargo-deb` (name, architecture mapping, unit, assets, config conffiles) and verify `mise run package` produces a `.deb` whose `dpkg-deb -c` listing matches the documented layout
 - [x] 3.2 Map `vX.Y.Z` to upstream `X.Y.Z` and Debian revision `-1`, and implement the strict-greater version check with `dpkg --compare-versions`; verify a repeated or lower version is refused
 - [x] 3.3 Reduce packaging to `weather-pi` and `weather-pi-archive-keyring`: remove `packaging/weather-pi-updater/`, its build step, the pin entry, and CI/docs references; verified no updater package/CLI/build step remains and both packages build for the host with `scripts/test-package.sh` (scratch-container install is 6.1)
-- [x] 3.4 Verify the packaged `weather-pi` contains a valid `md5sums` index so `dpkg -V weather-pi` can verify files; package contents are checked by `scripts/test-package.sh` (service start is 6.3)
+- [ ] 3.4 Verify the installed `weather-pi` package starts the service and that `dpkg -V weather-pi` is clean after install; locally verified the packaged `md5sums` index and contents with `scripts/test-package.sh`, but the real install/service start remains 6.3
 
 ## 4. Repository generation and signing
 
@@ -30,8 +30,8 @@
 
 ## 5. CI publication
 
-- [x] 5.1 Add `.github/workflows/release.yml` triggered by `v*` tags that runs checks, builds both architectures in parallel, and builds both packages; the workflow exists and is YAML-validated (a real tag run is still pending)
-- [x] 5.2 Add the publication step that pushes the regenerated repository tree to the `apt` branch and attaches packages, metadata, and `SHA256SUMS` to the GitHub Release only after checks and signing succeed; the workflow and local repository checks cover the logic (a real Pages/Release run is still pending)
+- [ ] 5.1 Add `.github/workflows/release.yml` triggered by `v*` tags that runs checks, builds both architectures in parallel, and builds both packages; the workflow exists and is YAML-validated, but a real tag/fork run is still pending
+- [ ] 5.2 Add the publication step that pushes the regenerated repository tree to the `apt` branch and attaches packages, metadata, and `SHA256SUMS` to the GitHub Release only after checks and signing succeed; implemented and covered by local repository checks, but a real Pages/Release run is still pending
 - [x] 5.3 Document cutting a release end to end in `docs/releasing.md`, including local package/repository verification and scratch-host integration commands
 
 ## 6. Integration check
@@ -52,7 +52,7 @@
   root, `weather-pi --version`, signed repository generation, `gpgv`
   verification, `by-hash` files, and five-version retention in Debian order.
 - Docker is unavailable in this environment, so 1.3/3.3 cross builds and
-  container installs, 5.1-5.3 real tag/Pages/Release runs, and all of section 6
-  were not executed. The workflow was syntax/YAML checked and the repository
-  generation/retention logic was exercised locally with dummy packages, but CI
-  itself was not run.
+  container installs, 3.4 real install/service start, 5.1-5.2 real
+  tag/Pages/Release runs, and all of section 6 were not executed. The workflow
+  was syntax/YAML checked and the repository generation/retention logic was
+  exercised locally with dummy packages, but CI itself was not run.

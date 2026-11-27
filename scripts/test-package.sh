@@ -189,11 +189,23 @@ dpkg-deb -x "$app_deb" "$root"
 dpkg-deb -e "$app_deb" "$control"
 
 [[ -f "$control/conffiles" ]] || die "conffiles is missing"
-grep -Fxq '/etc/weather-pi/greeter.toml' "$control/conffiles" ||
-    die "greeter.toml is not a conffile"
-grep -Fxq '/etc/weather-pi/countdown.toml' "$control/conffiles" ||
-    die "countdown.toml is not a conffile"
-assert_eq "2" "$(wc -l <"$control/conffiles" | tr -d ' ')" "conffile count"
+for required_conffile in \
+    /etc/weather-pi/greeter.toml \
+    /etc/weather-pi/countdown.toml; do
+    grep -Fxq "$required_conffile" "$control/conffiles" ||
+        die "$required_conffile is not a conffile"
+done
+
+# The remote-access change adds tunnel.toml as a third conffile. Accept either
+# layout so this test keeps passing on both sides of that merge, but never let
+# an unexpected extra conffile through.
+expected_conffiles=2
+if [[ -f "$root/etc/weather-pi/tunnel.toml" ]]; then
+    grep -Fxq '/etc/weather-pi/tunnel.toml' "$control/conffiles" ||
+        die "tunnel.toml is present but is not a conffile"
+    expected_conffiles=3
+fi
+assert_eq "$expected_conffiles" "$(wc -l <"$control/conffiles" | tr -d ' ')" "conffile count"
 echo "ok: conffiles"
 
 [[ -s "$control/md5sums" ]] || die "md5sums is missing or empty"
