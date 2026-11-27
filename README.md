@@ -29,7 +29,6 @@ mise run build:armv6  # release binary for armv6/armv7 (Pi Zero, armhf)
 mise run build:arm64  # release binary for aarch64 (Pi Zero 2 W, arm64)
 mise run package      # build the Debian packages into dist/
 mise run repo         # regenerate and sign the apt repository
-mise run image        # build the Raspberry Pi device image
 mise run deploy       # copy configuration and assets over the tunnel, restart
 mise run status       # tunnel, service, package and update state
 mise run release      # validate a tag, build packages, generate the repository
