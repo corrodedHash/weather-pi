@@ -1,0 +1,4 @@
+Acquire::Check-Valid-Until "true";
+Acquire::Retries "3";
+APT::Keep-Downloaded-Packages "true";
+DPkg::Lock::Timeout "120";

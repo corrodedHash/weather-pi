@@ -1,0 +1,25 @@
+# pi-gen configuration for the weather-pi device image.
+#
+# The pi-gen revision is pinned by image/build.sh; this file only selects the
+# base release and the stage list. Keep RELEASE in step with the archive suite
+# (trixie) and the apt source written by stage-weather-pi/00-apt.
+
+IMG_NAME="weather-pi"
+PI_GEN_RELEASE="weather-pi"
+RELEASE="trixie"
+
+STAGE_LIST="stage0 stage1 stage2 stage-weather-pi"
+
+# The image is compressed and signed by the release task, not by pi-gen.
+DEPLOY_COMPRESSION="none"
+
+TARGET_HOSTNAME="weather-pi"
+TIMEZONE_DEFAULT="UTC"
+
+# The application and the operator account are the same unprivileged user.
+# The account is created without a password; first boot installs authorized
+# keys from the FAT partition. The package's sysusers fragment only adds the
+# spi/gpio groups when the user already exists.
+FIRST_USER_NAME="weather-pi"
+PASSWORDLESS_SUDO="1"
+ENABLE_SSH="1"
